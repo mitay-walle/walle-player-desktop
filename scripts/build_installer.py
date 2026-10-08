@@ -1,0 +1,66 @@
+"""Build the one-file installer: dist\\installer\\WallePlayer-Setup-<version>.exe
+
+    .venv\\Scripts\\pyinstaller musicplayer.spec --noconfirm     # the app first
+    python scripts/build_installer.py [--app data\\next\\WallePlayer]   # another app folder: the running one is locked
+
+Both WallePlayer.exe and the installer are signed with the own certificate (scripts/sign.py) when it is on this
+computer; dist\\installer\\WallePlayer.cer is the public part for the other computers.
+"""
+import subprocess
+import sys
+import zipfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from musicplayer import __version__  # noqa: E402
+sys.path.insert(0, str(ROOT / "scripts"))
+import sign  # noqa: E402
+
+APP_DIR = ROOT / "dist" / "WallePlayer"
+WORK = ROOT / "build" / "installer"
+OUT = ROOT / "dist" / "installer"
+
+
+def main() -> int:
+    global APP_DIR
+    if "--app" in sys.argv:
+        APP_DIR = Path(sys.argv[sys.argv.index("--app") + 1]).resolve()
+    if not (APP_DIR / "WallePlayer.exe").exists():
+        print("build the app first: pyinstaller musicplayer.spec --noconfirm")
+        return 1
+    WORK.mkdir(parents=True, exist_ok=True)
+    signed = sign.sign([APP_DIR / "WallePlayer.exe"])       # before packing: the installed program is signed too
+    payload = WORK / "app.zip"
+    files = [p for p in APP_DIR.rglob("*") if p.is_file()]
+    print(f"packing {len(files)} files ...", flush=True)
+    with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+        for p in files:
+            z.write(p, p.relative_to(APP_DIR))
+    print(f"payload {payload.stat().st_size / 2**20:.0f} MB", flush=True)
+    res = ROOT / "musicplayer" / "resources"
+    src = (ROOT / "installer" / "installer.py").read_text(encoding="utf-8")
+    script = WORK / "installer.py"
+    script.write_text(src.replace('VERSION = "0.2.0"', f'VERSION = "{__version__}"'), encoding="utf-8")
+    name = f"WallePlayer-Setup-{__version__}"
+    sep = ";"
+    cmd = [str(ROOT / ".venv" / "Scripts" / "pyinstaller.exe"), "--noconfirm", "--onefile", "--windowed", "--name", name,
+           "--icon", str(res / "icon.ico"), "--distpath", str(OUT), "--workpath", str(WORK / "build"),
+           "--specpath", str(WORK),
+           "--add-data", f"{payload}{sep}.", "--add-data", f"{res / 'icon.ico'}{sep}.",
+           "--add-data", f"{res / 'wordmark.png'}{sep}.",
+           "--exclude-module", "numpy", "--exclude-module", "scipy", "--exclude-module", "sklearn",
+           "--exclude-module", "librosa", "--exclude-module", "numba", "--exclude-module", "llvmlite",
+           "--exclude-module", "PySide6.QtMultimedia", "--exclude-module", "PySide6.QtCharts",
+           "--exclude-module", "PySide6.QtWebEngineCore", str(script)]
+    subprocess.run(cmd, check=True)
+    exe = OUT / f"{name}.exe"
+    if signed:
+        sign.sign([exe])
+        sign.export(OUT / "WallePlayer.cer")
+    print(f"installer: {exe}  ({exe.stat().st_size / 2**20:.0f} MB)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

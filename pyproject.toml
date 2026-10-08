@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "musicplayer"
+version = "0.4.10"
+description = "Local music library cataloguer and player with an MCP interface"
+license = {text = "GPL-3.0-or-later"}
+requires-python = ">=3.11"
+dependencies = ["PySide6>=6.6", "mutagen>=1.47", "mcp>=2", "Pillow>=10", "python-mpv>=1.0", "segno>=1.6", "uvicorn", "starlette"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-qt>=4.4"]
+ml = ["numpy", "scipy", "soundfile", "librosa", "torch", "transformers", "scikit-learn"]
+
+[tool.setuptools.packages.find]
+include = ["musicplayer*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
