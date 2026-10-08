@@ -1,0 +1,30 @@
+# environment / build output
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# heavy files: model weights, databases, bundled libmpv
+*.pkl
+*.pt
+*.pth
+*.safetensors
+*.onnx
+*.ckpt
+*.bin
+*.db
+*.db-wal
+*.db-shm
+third_party/
+
+# local runtime data (sandbox databases, logs, screenshots) ...
+data/*
+# ... except the small hand-made label batches
+!data/bootstrap/
+data/bootstrap/*
+!data/bootstrap/seed_labels_*.json
+!data/bootstrap/relabel_*.json
+!data/bootstrap/seed_ids.txt

@@ -1,0 +1,971 @@
+{
+ "version": 1,
+ "source": "Freesound API analysis descriptors (https://freesound.org/docs/api/analysis_docs.html); display names from the fsapp web client; computed by sfxsorter.core.descriptors",
+ "groups": {
+  "temporal": {
+   "en": "Envelope / time",
+   "ru": "Огибающая и время"
+  },
+  "spectral": {
+   "en": "Spectrum",
+   "ru": "Спектр"
+  },
+  "tonal": {
+   "en": "Pitch and tonality",
+   "ru": "Высота и тональность"
+  },
+  "rhythm": {
+   "en": "Rhythm",
+   "ru": "Ритм"
+  },
+  "timbral": {
+   "en": "Timbre",
+   "ru": "Тембр"
+  },
+  "level": {
+   "en": "Loudness",
+   "ru": "Громкость"
+  }
+ },
+ "descriptors": {
+  "amplitude_peak_ratio": {
+   "group": "temporal",
+   "type": "float",
+   "unit": "ratio",
+   "range": [
+    0,
+    1
+   ],
+   "log": false,
+   "name": {
+    "en": "Peak position (0 = start, 1 = end)",
+    "ru": "Позиция пика (0 — в начале, 1 — в конце)"
+   },
+   "description": {
+    "en": "Position of the envelope maximum relative to the length: ~0 = impulsive, ~1 = crescendo (Essentia MaxToTotal).",
+    "ru": "Положение максимума огибающей относительно длины: ~0 — импульсный звук, ~1 — нарастающий (MaxToTotal)."
+   }
+  },
+  "decay_strength": {
+   "group": "temporal",
+   "type": "float",
+   "unit": "",
+   "range": [
+    0,
+    2000
+   ],
+   "log": true,
+   "name": {
+    "en": "Decay strength",
+    "ru": "Сила затухания"
+   },
+   "description": {
+    "en": "Strong decay: sqrt(envelope energy / temporal centroid in s); high for loud sounds whose energy is concentrated at the start (Essentia StrongDecay).",
+    "ru": "Сила затухания: sqrt(энергия огибающей / временной центроид, с); велика у громких звуков с энергией в начале (StrongDecay)."
+   }
+  },
+  "duration_effective": {
+   "group": "temporal",
+   "type": "float",
+   "unit": "s",
+   "range": [
+    0.01,
+    3600
+   ],
+   "log": true,
+   "name": {
+    "en": "Effective duration, s",
+    "ru": "Эффективная длительность, с"
+   },
+   "description": {
+    "en": "Time the envelope stays above 10 % of its maximum (Essentia EffectiveDuration).",
+    "ru": "Время, в течение которого огибающая выше 10 % максимума (EffectiveDuration)."
+   }
+  },
+  "log_attack_time": {
+   "group": "temporal",
+   "type": "float",
+   "unit": "log10(s)",
+   "range": [
+    -5,
+    2
+   ],
+   "log": false,
+   "name": {
+    "en": "log10 attack time",
+    "ru": "log10 времени атаки"
+   },
+   "description": {
+    "en": "log10 of the attack time: from 20 % to 90 % of the envelope maximum (Essentia LogAttackTime).",
+    "ru": "log10 времени атаки: от 20 % до 90 % максимума огибающей (LogAttackTime)."
+   }
+  },
+  "temporal_centroid": {
+   "group": "temporal",
+   "type": "float",
+   "unit": "ratio",
+   "range": [
+    0,
+    1
+   ],
+   "log": false,
+   "name": {
+    "en": "Temporal centroid (0–1)",
+    "ru": "Временной центроид (0–1)"
+   },
+   "description": {
+    "en": "Centre of mass of the envelope on a normalised 0..1 time axis (Essentia Centroid, range 1).",
+    "ru": "Центр масс огибающей на нормированной оси времени 0..1 (Centroid, range 1)."
+   }
+  },
+  "temporal_centroid_ratio": {
+   "group": "temporal",
+   "type": "float",
+   "unit": "ratio",
+   "range": [
+    0,
+    1
+   ],
+   "log": false,
+   "name": {
+    "en": "Temporal centroid (ratio)",
+    "ru": "Временной центроид (доля)"
+   },
+   "description": {
+    "en": "Temporal centroid of the envelope divided by its length (Essentia TCToTotal).",
+    "ru": "Временной центроид огибающей, делённый на её длину (TCToTotal)."
+   }
+  },
+  "temporal_decrease": {
+   "group": "temporal",
+   "type": "float",
+   "unit": "",
+   "range": [
+    -1,
+    1
+   ],
+   "log": false,
+   "name": {
+    "en": "Amplitude decay",
+    "ru": "Спад амплитуды"
+   },
+   "description": {
+    "en": "Linear-regression slope of the envelope over the normalised time axis; negative = decaying (Essentia Decrease).",
+    "ru": "Наклон линейной регрессии огибающей по нормированному времени; отрицательный — затухающий звук (Decrease)."
+   }
+  },
+  "temporal_skewness": {
+   "group": "temporal",
+   "type": "float",
+   "unit": "",
+   "range": [
+    -5,
+    10
+   ],
+   "log": false,
+   "name": {
+    "en": "Temporal skewness",
+    "ru": "Асимметрия во времени"
+   },
+   "description": {
+    "en": "Skewness of the envelope distribution in time; positive = energy early (Essentia DistributionShape).",
+    "ru": "Асимметрия распределения огибающей во времени; положительная — энергия в начале (DistributionShape)."
+   }
+  },
+  "temporal_spread": {
+   "group": "temporal",
+   "type": "float",
+   "unit": "",
+   "range": [
+    0,
+    0.1
+   ],
+   "log": false,
+   "name": {
+    "en": "Temporal spread",
+    "ru": "Разброс во времени"
+   },
+   "description": {
+    "en": "Variance of the envelope distribution around the temporal centroid (normalised time).",
+    "ru": "Дисперсия огибающей вокруг временного центроида (нормированное время)."
+   }
+  },
+  "start_time": {
+   "group": "temporal",
+   "type": "float",
+   "unit": "s",
+   "range": [
+    0,
+    60
+   ],
+   "log": false,
+   "name": {
+    "en": "Sound onset, s",
+    "ru": "Начало звука, с"
+   },
+   "description": {
+    "en": "Time of the first frame whose power exceeds -60 dB (Essentia StartStopSilence).",
+    "ru": "Время первого кадра с мощностью выше -60 дБ (StartStopSilence)."
+   }
+  },
+  "spectral_centroid": {
+   "group": "spectral",
+   "type": "float",
+   "unit": "Hz",
+   "range": [
+    50,
+    16000
+   ],
+   "log": true,
+   "name": {
+    "en": "Spectral centroid, Hz",
+    "ru": "Спектральный центроид, Гц"
+   },
+   "description": {
+    "en": "Centre of mass of the magnitude spectrum; correlates with perceived brightness.",
+    "ru": "Центр масс амплитудного спектра; связан с воспринимаемой яркостью."
+   }
+  },
+  "spectral_complexity": {
+   "group": "spectral",
+   "type": "float",
+   "unit": "peaks",
+   "range": [
+    0,
+    60
+   ],
+   "log": false,
+   "name": {
+    "en": "Spectral complexity",
+    "ru": "Спектральная сложность"
+   },
+   "description": {
+    "en": "Number of spectral peaks between 100 and 5000 Hz above magnitude 0.005 (Essentia SpectralComplexity).",
+    "ru": "Число спектральных пиков 100–5000 Гц выше амплитуды 0.005 (SpectralComplexity)."
+   }
+  },
+  "spectral_crest": {
+   "group": "spectral",
+   "type": "float",
+   "unit": "",
+   "range": [
+    1,
+    100
+   ],
+   "log": false,
+   "name": {
+    "en": "Spectral crest",
+    "ru": "Spectral crest"
+   },
+   "description": {
+    "en": "Maximum of the magnitude spectrum divided by its mean; high for tonal/peaky spectra.",
+    "ru": "Максимум амплитудного спектра, делённый на среднее; высокий у тональных спектров."
+   }
+  },
+  "spectral_energy": {
+   "group": "spectral",
+   "type": "float",
+   "unit": "",
+   "range": [
+    1e-06,
+    1000
+   ],
+   "log": true,
+   "name": {
+    "en": "Spectral energy",
+    "ru": "Спектральная энергия"
+   },
+   "description": {
+    "en": "Sum of squared spectrum magnitudes per frame.",
+    "ru": "Сумма квадратов амплитуд спектра в кадре."
+   }
+  },
+  "spectral_entropy": {
+   "group": "spectral",
+   "type": "float",
+   "unit": "bits",
+   "range": [
+    0,
+    12
+   ],
+   "log": false,
+   "name": {
+    "en": "Spectral entropy",
+    "ru": "Спектральная энтропия"
+   },
+   "description": {
+    "en": "Shannon entropy (log2) of the normalised magnitude spectrum; high for noise.",
+    "ru": "Энтропия Шеннона (log2) нормированного спектра; высокая у шума."
+   }
+  },
+  "spectral_flatness": {
+   "group": "spectral",
+   "type": "float",
+   "unit": "ratio",
+   "range": [
+    0,
+    1
+   ],
+   "log": false,
+   "name": {
+    "en": "Spectral flatness (noisiness)",
+    "ru": "Плоскость спектра (шумность)"
+   },
+   "description": {
+    "en": "Geometric / arithmetic mean of the magnitude spectrum: ~1 noise, ~0 tone (Essentia Flatness).",
+    "ru": "Отношение геометрического и арифметического среднего спектра: ~1 шум, ~0 тон (Flatness)."
+   }
+  },
+  "spectral_rolloff": {
+   "group": "spectral",
+   "type": "float",
+   "unit": "Hz",
+   "range": [
+    50,
+    16000
+   ],
+   "log": true,
+   "name": {
+    "en": "Roll-off, Hz",
+    "ru": "Roll-off, Гц"
+   },
+   "description": {
+    "en": "Frequency below which 85 % of the spectral energy lies.",
+    "ru": "Частота, ниже которой сосредоточено 85 % энергии спектра."
+   }
+  },
+  "spectral_skewness": {
+   "group": "spectral",
+   "type": "float",
+   "unit": "",
+   "range": [
+    -5,
+    20
+   ],
+   "log": false,
+   "name": {
+    "en": "Spectral skewness",
+    "ru": "Асимметрия спектра"
+   },
+   "description": {
+    "en": "Skewness of the spectral distribution; positive = energy at low frequencies.",
+    "ru": "Асимметрия спектра; положительная — энергия на низких частотах."
+   }
+  },
+  "spectral_spread": {
+   "group": "spectral",
+   "type": "float",
+   "unit": "Hz²",
+   "range": [
+    1000.0,
+    50000000.0
+   ],
+   "log": true,
+   "name": {
+    "en": "Spectral spread",
+    "ru": "Разброс спектра"
+   },
+   "description": {
+    "en": "Variance of the spectrum around its centroid.",
+    "ru": "Дисперсия спектра вокруг центроида."
+   }
+  },
+  "zero_crossing_rate": {
+   "group": "spectral",
+   "type": "float",
+   "unit": "ratio",
+   "range": [
+    0,
+    1
+   ],
+   "log": false,
+   "name": {
+    "en": "Zero-crossing rate",
+    "ru": "Zero-crossing rate"
+   },
+   "description": {
+    "en": "Fraction of consecutive samples that change sign; high for noisy sounds.",
+    "ru": "Доля соседних отсчётов со сменой знака; высокая у шумных звуков."
+   }
+  },
+  "dissonance": {
+   "group": "tonal",
+   "type": "float",
+   "unit": "",
+   "range": [
+    0,
+    0.5
+   ],
+   "log": false,
+   "name": {
+    "en": "Dissonance",
+    "ru": "Диссонанс"
+   },
+   "description": {
+    "en": "Sensory dissonance of the spectral peaks (Plomp-Levelt, Essentia Dissonance).",
+    "ru": "Сенсорный диссонанс спектральных пиков (Пломп-Левелт, Dissonance)."
+   }
+  },
+  "inharmonicity": {
+   "group": "tonal",
+   "type": "float",
+   "unit": "ratio",
+   "range": [
+    0,
+    0.5
+   ],
+   "log": false,
+   "name": {
+    "en": "Inharmonicity",
+    "ru": "Негармоничность"
+   },
+   "description": {
+    "en": "Energy-weighted deviation of the harmonic peaks from multiples of f0 (Essentia Inharmonicity).",
+    "ru": "Взвешенное по энергии отклонение гармоник от кратных f0 (Inharmonicity)."
+   }
+  },
+  "hpcp_crest": {
+   "group": "tonal",
+   "type": "float",
+   "unit": "",
+   "range": [
+    1,
+    36
+   ],
+   "log": false,
+   "name": {
+    "en": "HPCP crest",
+    "ru": "HPCP crest"
+   },
+   "description": {
+    "en": "Maximum / mean of the 36-bin harmonic pitch class profile: high when one pitch class dominates.",
+    "ru": "Максимум / среднее 36-полосного профиля высотных классов (HPCP): высокий, когда доминирует одна нота."
+   }
+  },
+  "hpcp_entropy": {
+   "group": "tonal",
+   "type": "float",
+   "unit": "bits",
+   "range": [
+    0,
+    5.2
+   ],
+   "log": false,
+   "name": {
+    "en": "HPCP entropy",
+    "ru": "HPCP entropy"
+   },
+   "description": {
+    "en": "Shannon entropy of the HPCP: low for clear pitch, high for noise/clusters.",
+    "ru": "Энтропия HPCP: низкая при ясной высоте, высокая у шума и кластеров."
+   }
+  },
+  "pitch": {
+   "group": "tonal",
+   "type": "float",
+   "unit": "Hz",
+   "range": [
+    20,
+    8000
+   ],
+   "log": true,
+   "name": {
+    "en": "Fundamental frequency, Hz (mean)",
+    "ru": "Основная частота, Гц (средняя)"
+   },
+   "description": {
+    "en": "Mean fundamental frequency (YIN) of pitched frames.",
+    "ru": "Средняя основная частота (YIN) тональных кадров."
+   }
+  },
+  "pitch_min": {
+   "group": "tonal",
+   "type": "float",
+   "unit": "Hz",
+   "range": [
+    20,
+    8000
+   ],
+   "log": true,
+   "name": {
+    "en": "Min frequency, Hz",
+    "ru": "Мин. частота, Гц"
+   },
+   "description": {
+    "en": "Minimum fundamental frequency of pitched frames.",
+    "ru": "Минимальная основная частота тональных кадров."
+   }
+  },
+  "pitch_max": {
+   "group": "tonal",
+   "type": "float",
+   "unit": "Hz",
+   "range": [
+    20,
+    8000
+   ],
+   "log": true,
+   "name": {
+    "en": "Max frequency, Hz",
+    "ru": "Макс. частота, Гц"
+   },
+   "description": {
+    "en": "Maximum fundamental frequency of pitched frames.",
+    "ru": "Максимальная основная частота тональных кадров."
+   }
+  },
+  "pitch_var": {
+   "group": "tonal",
+   "type": "float",
+   "unit": "Hz²",
+   "range": [
+    0,
+    1000000.0
+   ],
+   "log": true,
+   "name": {
+    "en": "Frequency variance",
+    "ru": "Дисперсия частоты"
+   },
+   "description": {
+    "en": "Variance of the fundamental frequency.",
+    "ru": "Дисперсия основной частоты."
+   }
+  },
+  "pitch_confidence": {
+   "group": "tonal",
+   "type": "float",
+   "unit": "ratio",
+   "range": [
+    0,
+    1
+   ],
+   "log": false,
+   "name": {
+    "en": "Pitch confidence (0–1)",
+    "ru": "Уверенность высоты (0–1)"
+   },
+   "description": {
+    "en": "Mean YIN confidence (1 - dip of the normalised difference function).",
+    "ru": "Средняя уверенность YIN (1 − глубина минимума разностной функции)."
+   }
+  },
+  "pitch_salience": {
+   "group": "tonal",
+   "type": "float",
+   "unit": "ratio",
+   "range": [
+    0,
+    1
+   ],
+   "log": false,
+   "name": {
+    "en": "Pitch salience",
+    "ru": "Тональность-выраженность (salience)"
+   },
+   "description": {
+    "en": "Highest spectrum autocorrelation (lags 100–5000 Hz) / autocorrelation at 0; high for harmonic sounds (Essentia PitchSalience).",
+    "ru": "Максимум автокорреляции спектра (сдвиги 100–5000 Гц) / значение при 0; высокий у гармонических звуков (PitchSalience)."
+   }
+  },
+  "note_name": {
+   "group": "tonal",
+   "type": "str",
+   "unit": "",
+   "range": null,
+   "log": false,
+   "name": {
+    "en": "Note (e.g. A4)",
+    "ru": "Нота (например A4)"
+   },
+   "description": {
+    "en": "Note of the median pitch with octave (A4 = 440 Hz).",
+    "ru": "Нота медианной высоты с октавой (A4 = 440 Гц)."
+   }
+  },
+  "note_midi": {
+   "group": "tonal",
+   "type": "int",
+   "unit": "MIDI",
+   "range": [
+    0,
+    127
+   ],
+   "log": false,
+   "name": {
+    "en": "MIDI note",
+    "ru": "MIDI-нота"
+   },
+   "description": {
+    "en": "MIDI number of the median pitch (69 = A4).",
+    "ru": "MIDI-номер медианной высоты (69 = A4)."
+   }
+  },
+  "note_confidence": {
+   "group": "tonal",
+   "type": "float",
+   "unit": "ratio",
+   "range": [
+    0,
+    1
+   ],
+   "log": false,
+   "name": {
+    "en": "Note confidence (0–1)",
+    "ru": "Уверенность ноты (0–1)"
+   },
+   "description": {
+    "en": "Median pitch confidence.",
+    "ru": "Медианная уверенность высоты."
+   }
+  },
+  "tonality": {
+   "group": "tonal",
+   "type": "str",
+   "unit": "",
+   "range": null,
+   "log": false,
+   "name": {
+    "en": "Key (e.g. C minor)",
+    "ru": "Тональность (например C minor)"
+   },
+   "description": {
+    "en": "Estimated key and scale, e.g. \"C minor\" (Krumhansl-Kessler profiles on the HPCP).",
+    "ru": "Оценка тональности, например «C minor» (профили Крумхансль-Кесслер по HPCP)."
+   }
+  },
+  "tonality_confidence": {
+   "group": "tonal",
+   "type": "float",
+   "unit": "ratio",
+   "range": [
+    0,
+    1
+   ],
+   "log": false,
+   "name": {
+    "en": "Key confidence",
+    "ru": "Уверенность тональности"
+   },
+   "description": {
+    "en": "Correlation of the HPCP with the best key profile.",
+    "ru": "Корреляция HPCP с лучшим профилем тональности."
+   }
+  },
+  "loudness": {
+   "group": "level",
+   "type": "float",
+   "unit": "LUFS",
+   "range": [
+    -70,
+    0
+   ],
+   "log": false,
+   "name": {
+    "en": "Loudness, LUFS (EBU R128)",
+    "ru": "Громкость, LUFS (EBU R128)"
+   },
+   "description": {
+    "en": "Integrated loudness, ITU-R BS.1770 / EBU R128.",
+    "ru": "Интегральная громкость по ITU-R BS.1770 / EBU R128."
+   }
+  },
+  "dynamic_range": {
+   "group": "level",
+   "type": "float",
+   "unit": "LU",
+   "range": [
+    0,
+    40
+   ],
+   "log": false,
+   "name": {
+    "en": "Dynamic range, LU",
+    "ru": "Динамический диапазон, LU"
+   },
+   "description": {
+    "en": "EBU R128 loudness range (P95 − P10 of 3 s short-term loudness); 0 for clips under 3 s.",
+    "ru": "Диапазон громкости EBU R128 (P95 − P10 кратковременной громкости 3 с); 0 для звуков короче 3 с."
+   }
+  },
+  "silence_rate": {
+   "group": "level",
+   "type": "float",
+   "unit": "ratio",
+   "range": [
+    0,
+    1
+   ],
+   "log": false,
+   "name": {
+    "en": "Silence ratio (0–1)",
+    "ru": "Доля тишины (0–1)"
+   },
+   "description": {
+    "en": "Fraction of frames with power below -30 dB.",
+    "ru": "Доля кадров с мощностью ниже −30 дБ."
+   }
+  },
+  "onset_count": {
+   "group": "rhythm",
+   "type": "int",
+   "unit": "",
+   "range": [
+    0,
+    2000
+   ],
+   "log": false,
+   "name": {
+    "en": "Onset count",
+    "ru": "Число онсетов"
+   },
+   "description": {
+    "en": "Number of detected onsets.",
+    "ru": "Число обнаруженных онсетов (начал событий)."
+   }
+  },
+  "single_event": {
+   "group": "rhythm",
+   "type": "bool",
+   "unit": "",
+   "range": null,
+   "log": false,
+   "name": {
+    "en": "Single event",
+    "ru": "Одно событие"
+   },
+   "description": {
+    "en": "True when the sound contains exactly one event (AudioCommons activity regions, clips up to 7 s).",
+    "ru": "Истина, если в звуке ровно одно событие (области активности AudioCommons, до 7 с)."
+   }
+  },
+  "loopable": {
+   "group": "rhythm",
+   "type": "bool",
+   "unit": "",
+   "range": null,
+   "log": false,
+   "name": {
+    "en": "Loopable",
+    "ru": "Зацикливается (loopable)"
+   },
+   "description": {
+    "en": "True when the duration fits a whole number of beats at the estimated BPM (LoopBpmConfidence > 0.95).",
+    "ru": "Истина, если длительность укладывается в целое число долей при оценённом BPM (LoopBpmConfidence > 0.95)."
+   }
+  },
+  "bpm": {
+   "group": "rhythm",
+   "type": "int",
+   "unit": "BPM",
+   "range": [
+    0,
+    300
+   ],
+   "log": false,
+   "name": {
+    "en": "BPM",
+    "ru": "BPM"
+   },
+   "description": {
+    "en": "Tempo from beat tracking (None with fewer than 2 beats).",
+    "ru": "Темп по трекингу долей (нет значения, если долей меньше двух)."
+   }
+  },
+  "bpm_confidence": {
+   "group": "rhythm",
+   "type": "float",
+   "unit": "ratio",
+   "range": [
+    0,
+    1
+   ],
+   "log": false,
+   "name": {
+    "en": "BPM confidence (0–1)",
+    "ru": "Уверенность BPM (0–1)"
+   },
+   "description": {
+    "en": "Normalised onset-envelope autocorrelation at the beat period.",
+    "ru": "Нормированная автокорреляция огибающей онсетов на периоде доли."
+   }
+  },
+  "beat_count": {
+   "group": "rhythm",
+   "type": "int",
+   "unit": "",
+   "range": [
+    0,
+    1000
+   ],
+   "log": false,
+   "name": {
+    "en": "Beat count",
+    "ru": "Число битов"
+   },
+   "description": {
+    "en": "Number of tracked beats.",
+    "ru": "Число найденных долей."
+   }
+  },
+  "beat_loudness": {
+   "group": "rhythm",
+   "type": "float",
+   "unit": "",
+   "range": [
+    0,
+    1
+   ],
+   "log": false,
+   "name": {
+    "en": "Beat loudness",
+    "ru": "Громкость битов"
+   },
+   "description": {
+    "en": "Mean signal power in a 100 ms window around each beat.",
+    "ru": "Средняя мощность сигнала в окне 100 мс вокруг каждой доли."
+   }
+  },
+  "boominess": {
+   "group": "timbral",
+   "type": "float",
+   "unit": "",
+   "range": [
+    0,
+    100
+   ],
+   "log": false,
+   "name": {
+    "en": "Boominess",
+    "ru": "Гулкость (boominess)"
+   },
+   "description": {
+    "en": "AudioCommons timbral model: sense of low-frequency resonance and boom.",
+    "ru": "Тембральная модель AudioCommons: ощущение низкочастотного гула и резонанса."
+   }
+  },
+  "brightness": {
+   "group": "timbral",
+   "type": "float",
+   "unit": "",
+   "range": [
+    0,
+    100
+   ],
+   "log": false,
+   "name": {
+    "en": "Brightness",
+    "ru": "Яркость (brightness)"
+   },
+   "description": {
+    "en": "AudioCommons timbral model: clear, high-pitched character.",
+    "ru": "Тембральная модель AudioCommons: ясный, высокочастотный характер."
+   }
+  },
+  "depth": {
+   "group": "timbral",
+   "type": "float",
+   "unit": "",
+   "range": [
+    0,
+    100
+   ],
+   "log": false,
+   "name": {
+    "en": "Depth",
+    "ru": "Глубина (depth)"
+   },
+   "description": {
+    "en": "AudioCommons timbral model: sense of depth / low-frequency weight.",
+    "ru": "Тембральная модель AudioCommons: ощущение глубины."
+   }
+  },
+  "hardness": {
+   "group": "timbral",
+   "type": "float",
+   "unit": "",
+   "range": [
+    0,
+    100
+   ],
+   "log": false,
+   "name": {
+    "en": "Hardness",
+    "ru": "Жёсткость (hardness)"
+   },
+   "description": {
+    "en": "AudioCommons timbral model: solid, forceful attack.",
+    "ru": "Тембральная модель AudioCommons: жёсткая, сильная атака."
+   }
+  },
+  "roughness": {
+   "group": "timbral",
+   "type": "float",
+   "unit": "",
+   "range": [
+    0,
+    100
+   ],
+   "log": false,
+   "name": {
+    "en": "Roughness",
+    "ru": "Шероховатость (roughness)"
+   },
+   "description": {
+    "en": "AudioCommons timbral model: uneven, buzzy texture.",
+    "ru": "Тембральная модель AudioCommons: неровная, шероховатая фактура."
+   }
+  },
+  "sharpness": {
+   "group": "timbral",
+   "type": "float",
+   "unit": "",
+   "range": [
+    0,
+    100
+   ],
+   "log": false,
+   "name": {
+    "en": "Sharpness",
+    "ru": "Резкость (sharpness)"
+   },
+   "description": {
+    "en": "AudioCommons timbral model: cutting, piercing quality.",
+    "ru": "Тембральная модель AudioCommons: режущий, пронзительный характер."
+   }
+  },
+  "warmth": {
+   "group": "timbral",
+   "type": "float",
+   "unit": "",
+   "range": [
+    0,
+    100
+   ],
+   "log": false,
+   "name": {
+    "en": "Warmth",
+    "ru": "Теплота (warmth)"
+   },
+   "description": {
+    "en": "AudioCommons timbral model: warm, mellow quality.",
+    "ru": "Тембральная модель AudioCommons: тёплое, мягкое звучание."
+   }
+  },
+  "reverbness": {
+   "group": "timbral",
+   "type": "bool",
+   "unit": "",
+   "range": null,
+   "log": false,
+   "name": {
+    "en": "Has reverb",
+    "ru": "Есть реверберация"
+   },
+   "description": {
+    "en": "AudioCommons timbral model: whether the sound is reverberant.",
+    "ru": "Тембральная модель AudioCommons: есть ли реверберация."
+   }
+  }
+ }
+}

@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111113">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Walle">
+<title>Walle Player</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/static/favicon.png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.4-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" fill="currentColor"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6.5" y="5" width="3.6" height="14" rx="1.2" fill="currentColor"/><rect x="13.9" y="5" width="3.6" height="14" rx="1.2" fill="currentColor"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="M6 6.2v11.6L15 12z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M18 5.5v13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="M18 6.2v11.6L9 12z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M6 5.5v13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-shuffle" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h3.5c4.5 0 6.5 10 11 10H21"/><path d="M3 17h3.5c1.6 0 2.8-1.2 3.8-2.8M13.7 9.8c1-1.6 2.2-2.8 3.8-2.8H21"/><path d="M18.5 4.5 21 7l-2.5 2.5M18.5 14.5 21 17l-2.5 2.5"/></g></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11V9a3 3 0 0 1 3-3h12"/><path d="M16.5 3.5 19 6l-2.5 2.5"/><path d="M20 13v2a3 3 0 0 1-3 3H5"/><path d="M7.5 20.5 5 18l2.5-2.5"/></g></symbol>
+  <symbol id="i-queue" viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 6h12M8 12h12M8 18h12"/><path d="M4 6h.01M4 12h.01M4 18h.01" stroke-width="2.4"/></g></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></g></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m5 9 7 7 7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><g fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></g></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M7 21H4.5a1.5 1.5 0 0 1-1.5-1.5v-7A1.5 1.5 0 0 1 4.5 11H7m0 10V11m0 10h9.6a2 2 0 0 0 2-1.6l1.3-6.5a2 2 0 0 0-2-2.4H14V5.6A2.6 2.6 0 0 0 11.4 3L7 11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-thumbdown" viewBox="0 0 24 24"><g transform="rotate(180 12 12)"><path d="M7 21H4.5a1.5 1.5 0 0 1-1.5-1.5v-7A1.5 1.5 0 0 1 4.5 11H7m0 10V11m0 10h9.6a2 2 0 0 0 2-1.6l1.3-6.5a2 2 0 0 0-2-2.4H14V5.6A2.6 2.6 0 0 0 11.4 3L7 11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></g></symbol>
+  <symbol id="i-wave" viewBox="0 0 24 24"><path d="M2 12c2.5 0 2.5-5 5-5s2.5 10 5 10 2.5-10 5-10 2.5 5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-music" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 18V5.5l11-2V16"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/></g></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.2-4 4.3-6 8-6s6.8 2 8 6" stroke-linecap="round"/></g></symbol>
+  <symbol id="i-album" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".6" fill="currentColor"/></g></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 6h11M4 11h11M4 16h7"/><path d="M17 20v-8l4-1"/><circle cx="15.5" cy="20" r="1.6"/></g></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
+  <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20.3s-7.6-4.6-9.3-9.3C1.5 7.6 3.7 4.5 7 4.5c2.1 0 3.6 1.2 5 3 1.4-1.8 2.9-3 5-3 3.3 0 5.5 3.1 4.3 6.5-1.7 4.7-9.3 9.3-9.3 9.3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-heart-on" viewBox="0 0 24 24"><path d="M12 20.3s-7.6-4.6-9.3-9.3C1.5 7.6 3.7 4.5 7 4.5c2.1 0 3.6 1.2 5 3 1.4-1.8 2.9-3 5-3 3.3 0 5.5 3.1 4.3 6.5-1.7 4.7-9.3 9.3-9.3 9.3z" fill="currentColor" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7 10.5 5 5 5-5"/><path d="M5 19.5h14"/></g></symbol>
+  <symbol id="i-volume" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></g></symbol>
+</svg>
+
+<div id="app" class="app">
+  <aside class="side" aria-label="Разделы">
+    <img class="side-logo" src="/static/wordmark.png" alt="Walle Player">
+    <nav class="side-nav" id="side-nav"></nav>
+    <div class="side-foot" id="side-foot"></div>
+  </aside>
+
+  <main class="main" id="main">
+    <header class="top" id="top">
+      <button class="icon-btn back" id="btn-back" aria-label="Назад" hidden><svg><use href="#i-back"/></svg></button>
+      <img class="top-mark" id="top-mark" src="/static/mark.png" alt="">
+      <h1 class="top-title" id="top-title">Моя волна</h1>
+      <button class="icon-btn" id="btn-search" aria-label="Поиск"><svg><use href="#i-search"/></svg></button>
+    </header>
+    <section class="view" id="view"></section>
+  </main>
+
+  <div class="mini" id="mini" hidden>
+    <div class="mini-progress"><i id="mini-bar"></i></div>
+    <button class="mini-open" id="mini-open" aria-label="Открыть плеер">
+      <span class="cover sm" id="mini-cover"></span>
+      <span class="mini-text"><b id="mini-title"></b><small id="mini-artist"></small></span>
+    </button>
+    <div class="mini-rate" id="mini-rate" hidden>
+      <button class="icon-btn" data-rate="dislike" aria-label="Не подходит"><svg><use href="#i-thumbdown"/></svg></button>
+      <button class="icon-btn" data-rate="like" aria-label="Подходит"><svg><use href="#i-up"/></svg></button>
+    </div>
+    <button class="icon-btn like-btn" id="mini-like" data-like aria-label="Нравится"><svg><use href="#i-heart"/></svg></button>
+    <div class="mini-ctrl">
+      <button class="icon-btn wide-only" data-act="prev" aria-label="Предыдущий"><svg><use href="#i-prev"/></svg></button>
+      <button class="play-btn sm" data-act="toggle" aria-label="Играть / пауза"><svg><use href="#i-play"/></svg></button>
+      <button class="icon-btn" data-act="next" aria-label="Следующий"><svg><use href="#i-next"/></svg></button>
+    </div>
+    <div class="mini-vol wide-only">
+      <svg class="vol-ico"><use href="#i-volume"/></svg>
+      <input type="range" id="volume" min="0" max="1" step="0.01" value="1" aria-label="Громкость">
+    </div>
+  </div>
+
+  <nav class="tabs" id="tabs" aria-label="Разделы"></nav>
+</div>
+
+<div class="full" id="full" aria-hidden="true">
+  <div class="full-inner">
+    <header class="full-head" id="full-head">
+      <button class="icon-btn" id="full-close" aria-label="Свернуть"><svg><use href="#i-down"/></svg></button>
+      <span class="full-label" id="full-label">Сейчас играет</span>
+      <button class="icon-btn" id="full-more" aria-label="Ещё"><svg><use href="#i-more"/></svg></button>
+    </header>
+    <img class="full-mark" src="/static/mark.png" alt="">
+    <div class="full-cover" id="full-cover"></div>
+    <div class="full-meta">
+      <div class="full-titles">
+        <h2 id="full-title"></h2>
+        <button class="link" id="full-artist"></button>
+      </div>
+      <button class="icon-btn like-btn lg" id="full-like" data-like aria-label="Нравится"><svg><use href="#i-heart"/></svg></button>
+    </div>
+    <div class="guess" id="guess" hidden>
+      <p id="guess-text"></p>
+      <div class="guess-btns">
+        <button class="pill" data-rate="dislike"><svg><use href="#i-thumbdown"/></svg>Нет</button>
+        <button class="pill" data-rate="fix">Другое…</button>
+        <button class="pill accent" data-rate="like"><svg><use href="#i-up"/></svg>Да</button>
+      </div>
+    </div>
+    <div class="chips small" id="full-moods"></div>
+    <button class="link genres-link" id="full-genres"></button>
+    <div class="seek">
+      <input type="range" id="seek" min="0" max="1000" step="1" value="0" aria-label="Перемотка">
+      <div class="times"><span id="t-cur">0:00</span><span id="t-dur">0:00</span></div>
+    </div>
+    <div class="controls">
+      <button class="icon-btn" data-act="shuffle" id="btn-shuffle" aria-label="Перемешать"><svg><use href="#i-shuffle"/></svg></button>
+      <button class="icon-btn lg" data-act="prev" aria-label="Предыдущий"><svg><use href="#i-prev"/></svg></button>
+      <button class="play-btn lg" data-act="toggle" aria-label="Играть / пауза"><svg><use href="#i-play"/></svg></button>
+      <button class="icon-btn lg" data-act="next" aria-label="Следующий"><svg><use href="#i-next"/></svg></button>
+      <button class="icon-btn" data-act="repeat" id="btn-repeat" aria-label="Повтор"><svg><use href="#i-repeat"/></svg><i class="badge1">1</i></button>
+    </div>
+    <div class="full-foot">
+      <button class="pill wave-pill" id="full-wave">AI-радио по настроению</button>
+      <button class="icon-btn" data-act="queue" aria-label="Очередь"><svg><use href="#i-queue"/></svg></button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet" id="sheet" aria-hidden="true">
+  <div class="sheet-back" data-close></div>
+  <div class="sheet-body">
+    <div class="sheet-grip" data-close></div>
+    <h3 id="sheet-title"></h3>
+    <div id="sheet-content"></div>
+  </div>
+</div>
+
+<div class="login" id="login" hidden>
+  <img src="/static/mark.png" alt="" class="login-mark">
+  <img src="/static/wordmark.png" alt="Walle Player" class="login-word">
+  <p class="login-server" id="login-server">Проверяю связь с компьютером…</p>
+  <div id="join-box">
+    <p>Представьтесь — на компьютере появится запрос, хозяин библиотеки нажмёт «Разрешить», и плеер откроется сам.</p>
+    <form id="join-form">
+      <input id="join-name" placeholder="Ваше имя" maxlength="40" autocomplete="nickname">
+      <button class="pill accent" type="submit">Попросить доступ</button>
+    </form>
+  </div>
+  <div id="join-wait" hidden>
+    <p><b>Ждём подтверждения на компьютере…</b><br>Попросите хозяина нажать «Разрешить» в Walle Player.</p>
+    <button class="pill ghost" id="join-cancel">Отменить</button>
+  </div>
+  <details class="login-key">
+    <summary>У меня есть ключ или QR-код</summary>
+    <p>QR-код — в Walle Player на компьютере, кнопка <b>«Другие устройства»</b>. Или вставьте ключ:</p>
+    <form id="login-form">
+      <input id="login-key" placeholder="Ключ доступа" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="pill" type="submit">Войти</button>
+    </form>
+  </details>
+  <p class="err" id="login-err"></p>
+</div>
+
+<div class="net" id="net" role="status" hidden></div>
+<div class="upd" id="upd" role="status" hidden><span>Walle Player обновился до <b id="upd-ver"></b></span><button id="upd-go">Обновить</button></div>
+<div class="dl" id="dl" role="status" hidden><span id="dl-text"></span><button id="dl-cancel">Отмена</button></div>
+<div class="toast" id="toast" role="status"></div>
+<audio id="audio" preload="auto"></audio>
+<script src="/static/offline.js"></script>
+<script src="/static/app.js"></script>
+<script>$("#dl-cancel").onclick = () => OFF.cancel();</script>
+</body>
+</html>
