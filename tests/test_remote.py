@@ -29,7 +29,7 @@ def lib(tmp_path):
         ids.append(db.upsert_track({"path": str(audio if i == 0 else tmp_path / f"missing{i}.mp3"), "title": title,
                                     "artist": artist, "albumartist": artist, "album": album, "year": 2000 + i,
                                     "track_no": i + 1, "disc_no": 1, "duration": 200.0, "mtime": 0, "size": 1,
-                                    "cover_key": None}, ["Рок"]))
+                                    "cover_key": None}, ["Rock"]))
     db.set_moods([ids[0]], ["Весёлое"])
     db.suggest_moods([(ids[1], "Весёлое", 0.9)], source="model")
     db.close()
@@ -304,14 +304,14 @@ def test_model_confidence(client, lib):
 def test_labels_like_the_desktop_feed(client, lib):
     tid = lib.ids[2]
     info = client.get("/api/info", headers=AUTH).json()["labels"]
-    assert info["eras"][0] == 1960 and any(f["name"] == "Punk" and "Pop punk" in f["subs"] for f in info["genre_tree"])
+    assert info["eras"][0] == 1960 and any(f["name"] == "Punk" and "Pop Punk" in f["subs"] for f in info["genre_tree"])
     t = client.post(f"/api/tracks/{tid}/labels", json={"moods": ["Весёлое"], "genres": ["Punk", "Pop punk"],
                                                         "flags": ["live"], "lang": "en", "vocal": "voc", "era": 1990},
                     headers=AUTH).json()
     assert (t["moods"], t["genres"], t["flags"], t["lang"], t["vocal"], t["era"]) == \
-        (["Весёлое"], ["Punk", "Pop punk"], ["live"], "en", "voc", 1990)
+        (["Весёлое"], ["Punk", "Pop Punk"], ["live"], "en", "voc", 1990)
     t = client.post(f"/api/tracks/{tid}/labels", json={"era": None, "lang": None}, headers=AUTH).json()
-    assert t["era"] is None and t["lang"] is None and t["genres"] == ["Punk", "Pop punk"]   # other labels kept
+    assert t["era"] is None and t["lang"] is None and t["genres"] == ["Punk", "Pop Punk"]   # other labels kept
     assert client.post(f"/api/tracks/{tid}/labels", json={"flags": ["nope"]}, headers=AUTH).status_code == 400
     assert client.post(f"/api/tracks/{tid}/labels", json={"era": 2000}, headers=GUEST).status_code == 403
 
@@ -630,3 +630,20 @@ def test_relay_https_name_switches_to_https_and_localhost_tunnel(qtbot, tmp_path
     finally:
         sh.stop()
         win.close()
+
+
+def test_access_requests_from_home_network_only(lib):
+    """By default a device may ask for access only from the home network; from the internet - a clear 403."""
+    access = Access(USERS, on_join=lambda req: None)
+    access.join_internet = False
+    phone_out = TestClient(build_app(lib, access), client=("94.25.170.3", 5000))      # mobile internet
+    phone_home = TestClient(build_app(lib, access), client=("192.168.10.55", 5000))   # home Wi-Fi
+    r = phone_out.post("/api/join", json={"name": "Петя"})
+    assert r.status_code == 403 and r.json()["code"] == "home_only"
+    assert phone_home.post("/api/join", json={"name": "Петя"}).status_code == 200
+    access.loopback_key = "через VPS"                                                 # http tunnel: address lost
+    assert not access.from_home("127.0.0.1")
+    access.loopback_key = None
+    assert access.from_home("127.0.0.1")                                               # this computer
+    access.join_internet = True                                                        # the owner allowed it
+    assert phone_out.post("/api/join", json={"name": "Петя"}).status_code == 200

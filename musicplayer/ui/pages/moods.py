@@ -426,6 +426,7 @@ class MoodsPage(QWidget):
         ctx.jobs.finished.connect(self._on_finished)
         ctx.events.tracks_changed.connect(lambda ids: self.refresh_soon())
         ctx.events.library_changed.connect(self.refresh_soon)
+        ctx.events.tracks_removed.connect(lambda ids: self.refresh_soon())
         self._dirty = False
         self.refresh()
 

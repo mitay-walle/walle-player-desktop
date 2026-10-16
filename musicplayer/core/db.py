@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS track_moods(track_id INTEGER, mood_id INTEGER,
   source TEXT DEFAULT 'manual', confidence REAL, PRIMARY KEY(track_id, mood_id));
 CREATE TABLE IF NOT EXISTS mood_rejects(track_id INTEGER, mood_id INTEGER, at REAL, PRIMARY KEY(track_id, mood_id));
 CREATE TABLE IF NOT EXISTS favorites(kind TEXT, key TEXT, added REAL, PRIMARY KEY(kind, key));
+CREATE TABLE IF NOT EXISTS hidden(user TEXT, kind TEXT, key TEXT COLLATE UNI, added REAL, PRIMARY KEY(user, kind, key));
+CREATE TABLE IF NOT EXISTS custom_genres(name TEXT PRIMARY KEY COLLATE UNI, parent TEXT, added REAL);
 CREATE TABLE IF NOT EXISTS plays(id INTEGER PRIMARY KEY, track_id INTEGER, played_at REAL, listened REAL);
 CREATE INDEX IF NOT EXISTS ix_plays_track ON plays(track_id, played_at);
 CREATE TABLE IF NOT EXISTS playlists(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, rules TEXT);
@@ -127,6 +129,8 @@ class Database:
                 self.conn.execute("INSERT INTO moods(name) VALUES(?)", (m,))
         self._fill_default_prompts()
         self._migrate()
+        from .genres import load_custom
+        load_custom(self)                         # the user's own families / sub-genres join the genre tree
 
     def _fill_default_prompts(self) -> None:
         """Text prompts (used by CLAP zero-shot) for the built-in moods; user-edited prompts are kept."""
@@ -162,7 +166,48 @@ class Database:
             for m in DEFAULT_MOODS:
                 self.conn.execute("INSERT OR IGNORE INTO moods(name) VALUES(?)", (m,))
             self._fill_default_prompts()
-        self.conn.execute("PRAGMA user_version=13")
+        if self.conn.execute("PRAGMA user_version").fetchone()[0] < 18:   # v17: Berlin School...; v18: no Russian
+            # v14: one genre vocabulary (aliases merged, sub-genre -> family) - see core/genres.py; v15: new aliases;
+            # v16: English names, glued tags («Post-Hardcore | Pop-Punk») split, the user's genres put in the tree
+            self.conn.execute("BEGIN")
+            self._translate_custom_genres()
+            self.normalize_all_genres()
+            self._translate_hidden_genres()
+            self.conn.execute("COMMIT")
+        self.conn.execute("PRAGMA user_version=18")
+
+    def _translate_hidden_genres(self) -> None:
+        """Genres a listener hid («Не показывать») under their old names follow the vocabulary («Поп» -> Pop)."""
+        from .genres import canonical
+        try:
+            rows = self.conn.execute("SELECT user, key, added FROM hidden WHERE kind='genre'").fetchall()
+        except sqlite3.OperationalError:
+            return
+        for user, key, added in rows:
+            new = (canonical(key) or [None])[0]
+            if new is None:                              # a Russian name the vocabulary does not know
+                self.conn.execute("DELETE FROM hidden WHERE user=? AND kind='genre' AND key=?", (user, key))
+            elif new != key:
+                self.conn.execute("DELETE FROM hidden WHERE user=? AND kind='genre' AND key=?", (user, key))
+                self.conn.execute("INSERT OR IGNORE INTO hidden VALUES(?,'genre',?,?)", (user, new, added))
+
+    def _translate_custom_genres(self) -> None:
+        """The user's own genres in the new vocabulary: one the tree now has («Дезкор» -> Deathcore) is dropped from
+        custom_genres, the others get the family's new name («Сладж» under «Метал» -> under Metal)."""
+        from .genres import GENRE_CHIPS, _reset_tree, canonical, load_custom
+        try:
+            rows = self.conn.execute("SELECT name, parent FROM custom_genres").fetchall()
+        except sqlite3.OperationalError:
+            return
+        _reset_tree()                                    # the built-in tree only
+        for name, parent in rows:
+            c = (canonical(name) or [None])[0]
+            if c is None or c in GENRE_CHIPS:            # built in now, or Russian (genres are English only)
+                self.conn.execute("DELETE FROM custom_genres WHERE name=?", (name,))
+            elif parent:
+                self.conn.execute("UPDATE custom_genres SET parent=? WHERE name=?",
+                                  ((canonical(parent) or [parent])[0], name))
+        load_custom(self)
 
     def _set_feat(self, tid: int, title: str | None, artist: str | None) -> None:
         self.conn.execute("DELETE FROM track_artists WHERE track_id=? AND role='feat'", (tid,))
@@ -274,8 +319,28 @@ class Database:
         return sorted(out, key=lambda d: (-d["tracks"], d["artist"].casefold()))
 
     def _set_genres(self, tid: int, genres: list[str]) -> None:
+        """Every genre write goes through the vocabulary (core/genres.py): canonical names, sub-genre -> its family."""
+        from .genres import normalize
         self.conn.execute("DELETE FROM track_genres WHERE track_id=?", (tid,))
-        self.conn.executemany("INSERT OR IGNORE INTO track_genres VALUES(?,?)", [(tid, g) for g in genres])
+        self.conn.executemany("INSERT OR IGNORE INTO track_genres VALUES(?,?)", [(tid, g) for g in normalize(genres)])
+
+    def normalize_all_genres(self) -> dict:
+        """Brings every track's genres to the vocabulary (aliases in other languages merged, families added)."""
+        from collections import defaultdict
+        from .genres import normalize
+        cur: dict[int, list[str]] = defaultdict(list)
+        for tid, g in self.conn.execute("SELECT track_id, genre FROM track_genres ORDER BY rowid"):
+            cur[tid].append(g)
+        before = {g.casefold() for gs in cur.values() for g in gs}
+        changed = 0
+        for tid, gs in cur.items():
+            new = normalize(gs)
+            if new != gs:
+                self._set_genres(tid, new)
+                self.refresh_fts(tid)
+                changed += 1
+        after = {g.casefold() for (g,) in self.conn.execute("SELECT DISTINCT genre FROM track_genres")}
+        return {"tracks_changed": changed, "genres_before": len(before), "genres_after": len(after)}
 
     def refresh_fts(self, tid: int) -> None:
         c = self.conn
@@ -283,7 +348,8 @@ class Database:
         c.execute("DELETE FROM fts WHERE rowid=?", (tid,))
         if t is None:
             return
-        genres = " ".join(r[0] for r in c.execute("SELECT genre FROM track_genres WHERE track_id=?", (tid,)))
+        from .genres import search_text
+        genres = search_text([r[0] for r in c.execute("SELECT genre FROM track_genres WHERE track_id=?", (tid,))])
         moods = " ".join(r[0] for r in c.execute(
             "SELECT m.name FROM track_moods tm JOIN moods m ON m.id=tm.mood_id "
             f"WHERE tm.track_id=? AND tm.source IN {_LS}", (tid,)))
@@ -356,13 +422,19 @@ class Database:
                min_plays: int | None = None, max_plays: int | None = None, plays_days: int | None = None,
                not_played_days: int | None = None, order: str = "artist", desc: bool = False,
                rare_power: float = 1.0, limit: int = 200, offset: int = 0, lang: str | None = None,
-               vocal: str | None = None, flag: str | None = None, exclude_flags: Iterable[str] | None = None) -> list[dict]:
+               vocal: str | None = None, flag: str | None = None, exclude_flags: Iterable[str] | None = None,
+               hide_user: str | None = None) -> list[dict]:
         """Filter tracks.  ``plays_days`` restricts min/max_plays and order='plays_period' to the last N days.
+        ``hide_user``: leave out what that listener chose «Не показывать» (core/hidden.py).
 
         order='rare_random' is a weighted shuffle preferring rarely played tracks.
         """
         where: list[str] = ["t.missing=0"]
         args: list[Any] = []
+        if hide_user:
+            from .hidden import SQL_VISIBLE
+            where.append(SQL_VISIBLE)
+            args.append(hide_user)
         pcount = "t.play_count"
         if plays_days is not None:
             pcount = "(SELECT COUNT(*) FROM plays p WHERE p.track_id=t.id AND p.played_at>=?)"
@@ -372,8 +444,9 @@ class Database:
                 where.append("t.id IN (SELECT rowid FROM fts WHERE fts MATCH ?)")
                 args.append(" ".join(f'"{w}"*' for w in terms))
         if genre:
+            from .genres import canonical          # «Рок» / «Rap» from an older client mean «Rock» / «Hip-Hop»
             where.append("EXISTS(SELECT 1 FROM track_genres g WHERE g.track_id=t.id AND g.genre=? COLLATE UNI)")
-            args.append(genre)
+            args.append((canonical(genre) or [genre])[0])
         if mood:
             st = "" if mood_status == "any" else (
                 f"AND tm.source IN {_LS}" if mood_status == "confirmed" else f"AND tm.source NOT IN {_LS}")
@@ -503,7 +576,13 @@ class Database:
 
     # ---- genres -------------------------------------------------------
     def set_genres(self, tids: Iterable[int], genres: list[str], mode: str = "set") -> None:
+        """mode: set | add | remove.  Names in any language/spelling are understood (core/genres.py); removing a
+        family removes its sub-genres too (a sub-genre always keeps its family)."""
+        from .genres import GENRE_TREE, canonical
         genres = split_genres(genres)
+        if mode == "remove":
+            genres = [c for g in genres for c in (canonical(g) or [g])]
+            genres += [s for g in list(genres) for s in GENRE_TREE.get(g, [])]
         for tid in tids:
             cur = [r[0] for r in self.conn.execute("SELECT genre FROM track_genres WHERE track_id=?", (tid,))]
             if mode == "add":

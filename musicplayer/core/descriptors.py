@@ -958,18 +958,14 @@ def extract_descriptors(
     timings: dict[str, float] | None = None,
 ) -> dict[str, DescriptorValue]:
     """Decode ``path`` (centre window of ``max_seconds``) and compute every descriptor."""
-    import soundfile as sf
-
     from musicplayer.core.audio import load_mono
 
     t0 = time.perf_counter()
     truncated = False
-    try:
-        info = sf.info(str(path))
-        if max_seconds and max_seconds > 0 and info.samplerate > 0:
-            truncated = info.frames / info.samplerate > max_seconds + 1e-6
-    except Exception as exc:  # noqa: BLE001 - load_mono below raises the real decoding error
-        log.debug("sf.info failed for %s: %s", path, exc)
+    from musicplayer.core.audio import duration_seconds
+    dur = duration_seconds(path)                        # libsndfile or the tags (.m4a); load_mono raises real errors
+    if max_seconds and max_seconds > 0 and dur > 0:
+        truncated = dur > max_seconds + 1e-6
     samples, rate = load_mono(path, target_sr=sr, max_seconds=max_seconds, offset_mode="center")
     start_window = None
     if truncated:

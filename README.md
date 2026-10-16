@@ -86,6 +86,20 @@ python scripts\test_build.py                       # запускает exe и �
 python scripts\e2e_demo.py                         # живое демо на запущенном приложении (песочница данных!)
 ```
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/) (pending: the releases are signed this way once the project is accepted).
+Signed releases are built from this repository by [GitHub Actions](.github/workflows/release.yml), see
+[docs/code-signing.md](docs/code-signing.md).
+
+- Committers and reviewers: [mitay-walle](https://github.com/mitay-walle)
+- Approvers: the repository owner
+
+Privacy policy: this program will not transfer any information to other networked systems unless specifically
+requested by the user or the person installing or operating it (looking up tags on MusicBrainz / Last.fm, sharing the
+library with the user's own devices).
+
 ## Лицензия
 
 [GPL-3.0](LICENSE). В сборку входят [Qt for Python / PySide6](https://doc.qt.io/qtforpython-6/) (LGPL-3.0) и

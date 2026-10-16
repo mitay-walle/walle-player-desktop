@@ -15,8 +15,8 @@ def test_write_is_explicit_reversible_and_dry_by_default(db, library, tmp_path):
     assert r["dry_run"] and r["would_change"] == 1 and EasyID3(f)["genre"] == ["Pop"]
     r = tagwrite.write_genres(db, [tid], dry_run=False)
     assert r["written"] == 1 and split_genres(EasyID3(f)["genre"]) == ["Oldies", "Ballad"]  # v2.3 joins with "/"
-    assert db.genre_changes() == []                            # file and DB agree now
+    assert tid not in {c["id"] for c in db.genre_changes()}     # file and DB agree now (the others wait for Russian names)
     assert tagwrite.restore_genres(db, [tid])["restored"] == 1
     assert EasyID3(f)["genre"] == ["Pop"]
     assert db.get_track(tid)["genres"] == ["Oldies", "Ballad"]  # DB keeps the user's edit
-    assert len(db.genre_changes()) == 1                         # ... and can be written again
+    assert tid in {c["id"] for c in db.genre_changes()}         # ... and can be written again

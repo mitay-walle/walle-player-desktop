@@ -22,6 +22,15 @@ def test_scan_runs_in_a_process_and_the_gui_stays_responsive(qtbot, app, library
     assert gaps and max(gaps) < 1.5                          # the event loop kept ticking
 
 
+def test_training_keeps_the_previous_model_in_history(tmp_path):
+    from musicplayer.core.procjobs import backup_model
+    (tmp_path / "mood_model.pkl").write_bytes(b"old model")
+    backup_model(tmp_path)
+    kept = list((tmp_path / "history").glob("mood_model-*.pkl"))
+    assert len(kept) == 1 and kept[0].read_bytes() == b"old model"
+    backup_model(tmp_path / "nothing-here")                  # no model yet: nothing to keep, no error
+
+
 def test_scan_does_not_block_writers(db, library, tmp_path):
     """While a scan runs, another connection can write within its busy timeout (short transactions)."""
     import threading
@@ -32,10 +41,10 @@ def test_scan_does_not_block_writers(db, library, tmp_path):
     a = Database(path)
     done = threading.Event()
 
-    def slow_progress(i, p):
+    def slow_progress(d, t, m):
         time.sleep(0.4)
 
-    th = threading.Thread(target=lambda: (scanner.scan(a, library, tmp_path / "c", lambda i, p: None), done.set()))
+    th = threading.Thread(target=lambda: (scanner.scan(a, library, tmp_path / "c", lambda d, t, m: None), done.set()))
     th.start()
     b = Database(path)
     b.conn.execute("PRAGMA busy_timeout=3000")

@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QListView, QListW
                                QVBoxLayout, QWidget)
 
 from musicplayer.ui.context import AppContext
-from musicplayer.ui.widgets import CoverCache, JumpSlider
+from musicplayer.ui.widgets import CoverCache, JumpSlider, refresh_when_shown
 
 
 class AlbumsPage(QWidget):
@@ -44,6 +44,8 @@ class AlbumsPage(QWidget):
         self.grid.customContextMenuRequested.connect(self._menu)
         self.grid.setToolTip("Двойной клик — играть альбом, правый клик — в избранное")
         ctx.events.library_changed.connect(self.refresh)
+        refresh_when_shown(self, ctx.events.tracks_removed, self.refresh)
+        refresh_when_shown(self, ctx.events.hidden_changed, self.refresh)
         self.refresh()
 
     def eventFilter(self, obj, ev) -> bool:
@@ -75,7 +77,8 @@ class AlbumsPage(QWidget):
     def refresh(self) -> None:
         q = self.search.text().strip().casefold()
         self.grid.clear()
-        for a in self.ctx.db.list_values("album"):
+        from musicplayer.core import hidden
+        for a in hidden.visible_values(self.ctx.db, self.ctx.listener, "album", self.ctx.db.list_values("album")):
             if q and q not in f"{a['name']} {a['artist']}".casefold():
                 continue
             it = QListWidgetItem(QIcon(self.covers.pixmap(a["cover_key"], int(self.tile * self.zoom))),
@@ -95,13 +98,13 @@ class AlbumsPage(QWidget):
             return
         artist, album = item.data(Qt.ItemDataRole.UserRole)
         key = album_key(artist, album)
-        on = self.ctx.db.is_favorite("album", key)
+        on = self.ctx.is_liked("album", key)
         m = QMenu(self)
         act = m.addAction("♥ Убрать из избранного" if on else "♡ В избранное")
         play = m.addAction("▶ Играть альбом")
         chosen = m.exec(self.grid.viewport().mapToGlobal(pos))
         if chosen is act:
-            self.ctx.db.set_favorite("album", key, not on)
+            self.ctx.set_liked("album", key, not on)
             self.ctx.events.favorites_changed.emit()
         elif chosen is play:
             self.play_item(item)

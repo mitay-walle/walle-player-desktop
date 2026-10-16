@@ -69,6 +69,8 @@ class ArtistsPage(QWidget):
         self.table.currentCellChanged.connect(lambda *_: self._fav_text())
         self._dirty = True
         ctx.events.library_changed.connect(self._mark)
+        ctx.events.tracks_removed.connect(lambda ids: self._mark())
+        ctx.events.hidden_changed.connect(self._mark)
         ctx.events.tracks_changed.connect(lambda ids: self._mark())
 
     def _mark(self) -> None:
@@ -83,7 +85,9 @@ class ArtistsPage(QWidget):
 
     def refresh(self) -> None:
         self._dirty = False
-        self.rows = self.ctx.db.artists_overview()
+        from musicplayer.core import hidden
+        gone = hidden.keys(self.ctx.db, self.ctx.listener)["artist"]
+        self.rows = [r for r in self.ctx.db.artists_overview() if (r["artist"] or "").casefold() not in gone]
         self.fill()
 
     def fill(self) -> None:
@@ -140,13 +144,13 @@ class ArtistsPage(QWidget):
 
     def _fav_text(self) -> None:
         a = self.current_artist()
-        on = bool(a) and self.ctx.db.is_favorite("artist", a)
+        on = bool(a) and self.ctx.is_liked("artist", a)
         self.btn_fav.setText("♥ В избранном (убрать)" if on else "♡ В избранное")
 
     def toggle_favorite(self) -> None:
         a = self.current_artist()
         if a:
-            self.ctx.db.set_favorite("artist", a, not self.ctx.db.is_favorite("artist", a))
+            self.ctx.set_liked("artist", a, not self.ctx.is_liked("artist", a))
             self.ctx.events.favorites_changed.emit()
             self._fav_text()
 

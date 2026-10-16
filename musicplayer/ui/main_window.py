@@ -126,10 +126,8 @@ class PlayerBar(QWidget):
         self.btn_repeat = QPushButton()
         make_icon_button(self.btn_shuffle, "shuffle", TOKENS["text_muted"], 22)
         make_icon_button(self.btn_repeat, "repeat", TOKENS["text_muted"], 22)
-        self.btn_compact = QPushButton()
-        self.btn_compact.setCheckable(True)
-        self.btn_compact.setToolTip("Компактный вид: только проигрыватель (Ctrl+K)")
-        make_icon_button(self.btn_compact, "compact", TOKENS["text_muted"], 22)
+        self.btn_hide = QPushButton()
+        make_icon_button(self.btn_hide, "hide", TOKENS["text_muted"], 22, "Не показывать: этот трек, альбом или исполнителя")
         self.btn_tags = QPushButton()
         make_icon_button(self.btn_tags, "tag", TOKENS["text_muted"], 22)
         self.btn_tags.setToolTip("Разметить играющий трек: настроения и тип записи (Ctrl+L)")
@@ -158,6 +156,7 @@ class PlayerBar(QWidget):
         lay.addWidget(self.cover)
         lay.addLayout(info, 2)
         lay.addWidget(self.btn_fav)
+        lay.addWidget(self.btn_hide)
         lay.addWidget(self.strip)                     # small equaliser next to the title, not a full-width band
         lay.addWidget(self.btn_shuffle)
         for b in (self.btn_prev, self.btn_play, self.btn_next):
@@ -166,7 +165,6 @@ class PlayerBar(QWidget):
         lay.addWidget(self.seek, 5)
         lay.addWidget(self.time)
         lay.addWidget(self.btn_tags)
-        lay.addWidget(self.btn_compact)
         lay.addWidget(self.btn_mini)
         self.vol_icon = QLabel()
         self.vol_icon.setPixmap(icon("volume", TOKENS["text_muted"], 20).pixmap(20, 20))
@@ -184,14 +182,17 @@ class PlayerBar(QWidget):
         self.btn_prev.clicked.connect(p.prev)
         self.btn_next.clicked.connect(p.next)
         self.btn_play.clicked.connect(p.toggle)
-        self.btn_tags.clicked.connect(self.open_tags)
+        self.btn_tags.clicked.connect(self.labels_menu)
         self.btn_fav.clicked.connect(self.toggle_favorite)
+        from musicplayer.ui.hideactions import current_track_menu
+        self.btn_hide.clicked.connect(lambda: current_track_menu(self.ctx, self.btn_hide))
         ctx.events.favorites_changed.connect(lambda: self._show_fav(self.ctx.player.current))
-        for w in (self.cover, self.title, self.sub):  # click on the cover / title: show the track in the library
+        for w in (self.cover, self.title):           # click on the cover / title: show the track in the library
             w.setCursor(Qt.CursorShape.PointingHandCursor)
             w.setToolTip("Показать трек в библиотеке")
             w.installEventFilter(self)
-        self.btn_compact.toggled.connect(lambda on: self.window().toggle_compact(on))
+        from musicplayer.ui.tracklinks import make_link_label
+        make_link_label(self.sub, ctx, lambda: self.ctx.player.current)   # artist / album: their tracks
         self.btn_shuffle.clicked.connect(self.cycle_shuffle)
         self.btn_repeat.clicked.connect(self.cycle_repeat)
         self.vol.valueChanged.connect(lambda v: p.set_volume(v / 100))
@@ -204,7 +205,7 @@ class PlayerBar(QWidget):
         self.on_track(None)
 
     def eventFilter(self, obj, ev) -> bool:
-        if obj in (self.cover, self.title, self.sub) and ev.type() == QEvent.Type.MouseButtonRelease                 and ev.button() == Qt.MouseButton.LeftButton:
+        if obj in (self.cover, self.title) and ev.type() == QEvent.Type.MouseButtonRelease                 and ev.button() == Qt.MouseButton.LeftButton:
             self.reveal_current()
             return True
         return super().eventFilter(obj, ev)
@@ -213,9 +214,6 @@ class PlayerBar(QWidget):
         t = self.ctx.player.current
         if t is None:
             return
-        win = self.window()
-        if hasattr(win, "body_w") and not win.body_w.isVisible():
-            win.toggle_compact(False)                 # compact view: open the full window first
         self.ctx.events.navigate.emit("library")
         self.ctx.events.show_track.emit(t["id"])
 
@@ -272,11 +270,20 @@ class PlayerBar(QWidget):
         t = self.ctx.player.current
         self.on_track(t)
 
-    def open_tags(self) -> None:
+    def _popup(self):
         from musicplayer.ui.tagpopup import TagPopup
         if not hasattr(self, "_tags"):
             self._tags = TagPopup(self.ctx, self)
-        self._tags.open_for(self.ctx.player.current, self.btn_tags)
+        return self._tags
+
+    def open_tags(self) -> None:
+        """Ctrl+L: the labels of the playing track at once."""
+        self._popup().open_for(self.ctx.player.current, self.btn_tags)
+
+    def labels_menu(self) -> None:
+        """The tag button: labels of the track, its album or its artist."""
+        from musicplayer.ui.tagpopup import labels_menu
+        labels_menu(self.ctx, self.btn_tags, self._popup())
 
     def update_modes(self) -> None:
         q = self.ctx.player.queue
@@ -301,14 +308,16 @@ class PlayerBar(QWidget):
         if t is None:
             return
         key = str(t["id"])
-        self.ctx.db.set_favorite("track", key, not self.ctx.db.is_favorite("track", key))
+        self.ctx.set_liked("track", key, not self.ctx.is_liked("track", key))
         self.ctx.events.favorites_changed.emit()
 
     def _show_fav(self, t: dict | None) -> None:
-        on = bool(t) and self.ctx.db.is_favorite("track", str(t["id"]))
+        on = bool(t) and self.ctx.is_liked("track", str(t["id"]))
         self.btn_fav.setIcon(icon("heart_on" if on else "heart", TOKENS["accent"] if on else TOKENS["text_muted"], 22))
-        self.btn_fav.setToolTip("Убрать из избранного (F)" if on else "В избранное (F)")
+        who = f" — слушатель «{self.ctx.listener_name}»" if self.ctx.listener_name else ""
+        self.btn_fav.setToolTip(("Убрать из избранного (F)" if on else "В избранное (F)") + who)
         self.btn_fav.setEnabled(t is not None)
+        self.btn_hide.setEnabled(t is not None)
 
     def on_track(self, t: dict | None) -> None:
         self._show_fav(t)
@@ -321,7 +330,8 @@ class PlayerBar(QWidget):
             self.seek.setValue(0)
             return
         self.title.setText(t["title"])
-        self.sub.setText(f"{t['artist']} — {t['album'] or 'без альбома'}")
+        from musicplayer.ui import tracklinks
+        self.sub.setText(tracklinks.html(t))
         self.cover.setPixmap(self.covers.pixmap(t["cover_key"], 64))
 
     def on_position(self, pos: float, dur: float) -> None:
@@ -405,6 +415,16 @@ class MainWindow(QMainWindow):
         self.btn_share.setIcon(icon("phone", TOKENS["text_muted"], 20))
         self.btn_share.setIconSize(QSize(20, 20))
         self.btn_share.setToolTip("Слушать библиотеку на телефоне и других компьютерах (Wi-Fi и интернет)")
+        self.listener_box = QComboBox()                  # whose likes / «Не показывать» (guests of the library server)
+        self.listener_box.setToolTip("За кого ставить лайки и «Не показывать»: вы или слушатель с телефона")
+        self.listener_box.hide()
+        sv.addWidget(self.listener_box)
+        self.btn_marks = QPushButton()                   # what listeners marked «на удаление» (shown when there is any)
+        self.btn_marks.setIcon(icon("trash", TOKENS["danger"], 20))
+        self.btn_marks.setIconSize(QSize(20, 20))
+        self.btn_marks.setToolTip("Треки и альбомы, которые слушатели пометили на удаление: удалить или оставить")
+        self.btn_marks.hide()
+        sv.addWidget(self.btn_marks)
         sv.addWidget(self.btn_share)
         sv.addWidget(self.btn_folder)
         sv.addWidget(self.btn_rescan)
@@ -462,6 +482,17 @@ class MainWindow(QMainWindow):
         from musicplayer.ui.share_dialog import RemoteSharing
         self.sharing = RemoteSharing(ctx)
         self.btn_share.clicked.connect(self.open_share)
+        self.listener_box.currentIndexChanged.connect(self._listener_chosen)
+        self.btn_marks.clicked.connect(self.open_delete_marks)
+        self._marks_timer = QTimer(self, interval=15000)  # phones mark through the server: look now and then
+        self._marks_timer.timeout.connect(self._update_marks)
+        self._marks_timer.start()
+        ctx.events.tracks_removed.connect(lambda ids: self._update_marks())
+        ctx.events.delete_marks_changed.connect(self._update_marks)
+        self._update_marks()
+        self.sharing.changed.connect(lambda: QTimer.singleShot(0, self._fill_listeners))
+        ctx.events.favorites_changed.connect(lambda: self.player_bar._show_fav(ctx.player.current))
+        self._fill_listeners()
         self.sharing.join_requested.connect(self._join_request)
         if self.sharing.cfg.enabled:                         # the library was open for other devices at exit
             QTimer.singleShot(500, self._autostart_sharing)
@@ -479,6 +510,7 @@ class MainWindow(QMainWindow):
         self.zoom_box.currentIndexChanged.connect(lambda i: self.set_zoom(ZOOMS[i] / 100))
         self.mini = MiniPlayer(ctx, self.covers)
         self.mini.expand_requested.connect(self.leave_mini)
+        self.mini.moved.connect(self._mini_moved)
         self.player_bar.btn_mini.clicked.connect(self.enter_mini)
         self._session_timer = QTimer(self, interval=5000)
         self._session_timer.timeout.connect(self.save_session)
@@ -520,7 +552,6 @@ class MainWindow(QMainWindow):
         p = self.ctx.player
         for seq, fn in (("Ctrl+Right", p.next), ("Ctrl+Left", p.prev), ("Ctrl+Space", p.toggle),
                         ("F", lambda: self.player_bar.toggle_favorite()),
-                        ("Ctrl+K", lambda: self.toggle_compact(self.body_w.isVisible())),
                         ("Ctrl+L", lambda: self.player_bar.open_tags()),
                         ("Ctrl+M", lambda: self.leave_mini() if self.mini.isVisible() else self.enter_mini()),
                         ("Ctrl+=", lambda: self.zoom_step(1)), ("Ctrl++", lambda: self.zoom_step(1)),
@@ -529,6 +560,25 @@ class MainWindow(QMainWindow):
             QShortcut(QKeySequence(seq), self, activated=fn)
 
     # ---- session: queue, current track and position survive a restart --------------------------
+    def offer_undo(self, text: str, undo) -> None:
+        """A message in the status bar with «Отменить» for a few seconds (after «Не показывать» and the like)."""
+        from PySide6.QtWidgets import QPushButton
+        btn = getattr(self, "_undo_btn", None)
+        if btn is None:
+            btn = self._undo_btn = QPushButton("Отменить")
+            btn.setObjectName("Ghost")
+            self.statusBar().addPermanentWidget(btn)
+            self._undo_timer = QTimer(self, singleShot=True, interval=10000)
+            self._undo_timer.timeout.connect(lambda: (btn.hide(), self.statusBar().clearMessage()))
+        try:
+            btn.clicked.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        btn.clicked.connect(lambda: (undo(), btn.hide(), self.statusBar().showMessage("Отменено", 3000)))
+        btn.show()
+        self.statusBar().showMessage(text, 10000)
+        self._undo_timer.start()
+
     def save_session(self) -> None:
         if self.ctx.closed:
             return
@@ -565,28 +615,6 @@ class MainWindow(QMainWindow):
         if hasattr(self.ctx.player, "cue"):
             self.ctx.player.cue(tracks, idx, s.last_pos)
 
-    # ---- compact (playback-only) view ------------------------------------------------
-    def toggle_compact(self, on: bool | None = None) -> None:
-        """Hide the sidebar and pages, keep only the player bar; the full window geometry is restored on the way back."""
-        on = (not self.body_w.isHidden()) if on is None else on
-        if on == (not self.body_w.isVisible()) and self.player_bar.btn_compact.isChecked() == on:
-            return
-        bar = self.player_bar
-        bar.btn_compact.blockSignals(True)
-        bar.btn_compact.setChecked(on)
-        bar.btn_compact.blockSignals(False)
-        if on:
-            self._full_geom = self.saveGeometry()
-            self.body_w.hide()
-            self.setMinimumSize(360, 0)
-            self.resize(480, 10)                          # the layout grows it to the player bar's height
-            QTimer.singleShot(0, lambda: self.resize(self.width(), bar.sizeHint().height() + 12))
-        else:
-            self.body_w.show()
-            self.setMinimumSize(420, 300)
-            if getattr(self, "_full_geom", None):
-                self.restoreGeometry(self._full_geom)
-
     # ---- mini player ----------------------------------------------------
     def enter_mini(self) -> None:
         """Hide the full window, show the tiny always-on-top player where it was last (or in the screen corner)."""
@@ -600,10 +628,16 @@ class MainWindow(QMainWindow):
         self.mini.show()
         self.hide()
 
+    def _mini_moved(self, p) -> None:
+        """Dragged: the mini player's place is kept at once (a crash or a Windows restart does not lose it)."""
+        self.ctx.settings.mini_pos = [p.x(), p.y()]
+        self.ctx.save_settings()
+
     def leave_mini(self) -> None:
         p = self.mini.pos()
         self.ctx.settings.mini_pos = [p.x(), p.y()]
         self.mini.hide()
+        self.player_bar.vol.setValue(round(self.ctx.player.volume * 100))   # the mini player may have changed it
         self.show()
         self.raise_()
         self.activateWindow()
@@ -720,12 +754,14 @@ class MainWindow(QMainWindow):
 
     def _job_progress(self, job: JobInfo) -> None:
         if job.total > 0:
+            self.job_label.setText(job.title)
             self.job_bar.setRange(0, job.total)
             self.job_bar.setValue(job.done)
-            self.job_bar.setFormat(f"{job.done}/{job.total}  {job.message}")
+            pct = job.done * 100 // job.total
+            self.job_bar.setFormat(f"{job.done} из {job.total} ({pct}%)" + (f"  ·  {job.message}" if job.message else ""))
         else:
             self.job_bar.setRange(0, 0)
-            self.job_label.setText(f"{job.title}: {job.done} файлов")
+            self.job_label.setText(f"{job.title}: {job.message or f'{job.done} файлов'}")
 
     def _job_finished(self, job: JobInfo) -> None:
         self.job_row.hide()
@@ -737,6 +773,39 @@ class MainWindow(QMainWindow):
         elif job.kind == "autotag":
             self.ctx.events.tracks_changed.emit([])
             self.ctx.events.library_changed.emit()
+
+    def _fill_listeners(self) -> None:
+        """The listener chooser: shown when the library has guests; a removed guest falls back to the owner."""
+        users = self.sharing.cfg.users
+        box = self.listener_box
+        box.blockSignals(True)
+        box.clear()
+        for u in users:
+            box.addItem(f"♥ {u['name']}" + (" (вы)" if u.get("owner") else ""), "owner" if u.get("owner") else u["id"])
+        i = box.findData(self.ctx.listener)
+        box.setCurrentIndex(max(i, 0))
+        box.blockSignals(False)
+        box.setVisible(len(users) > 1)
+        self._listener_chosen(box.currentIndex())
+
+    def _listener_chosen(self, i: int) -> None:
+        uid = self.listener_box.itemData(i) or "owner"
+        name = self.listener_box.itemText(i).lstrip("♥ ").replace(" (вы)", "")
+        self.ctx.set_listener(uid, name)
+
+    def _update_marks(self) -> None:
+        from musicplayer.core import deletemarks
+        if self.ctx.closed:
+            return
+        n = deletemarks.count(self.ctx.db)
+        self.btn_marks.setVisible(n > 0)
+        self.btn_marks.setText("" if getattr(self, "_side_compact", False) else f"  На удаление ({n})")
+
+    def open_delete_marks(self) -> None:
+        from musicplayer.ui.deletemarks_dialog import DeleteMarksDialog
+        names = {("owner" if u.get("owner") else u["id"]): u["name"] for u in self.sharing.cfg.users}
+        DeleteMarksDialog(self.ctx, names, self).exec()
+        self._update_marks()
 
     def open_share(self) -> None:
         from musicplayer.ui.share_dialog import ShareDialog
@@ -767,9 +836,12 @@ class MainWindow(QMainWindow):
             tray.hid_window()
             return
         self.sharing.stop(remember=False)
+        if self.mini.isVisible():
+            p = self.mini.pos()
+            self.ctx.settings.mini_pos = [p.x(), p.y()]
         self.mini.close()
         self.save_session()
-        geom = self._full_geom if not self.body_w.isVisible() and getattr(self, "_full_geom", None) else self.saveGeometry()
+        geom = self.saveGeometry()
         self.ctx.settings.window_geom = bytes(geom.toHex()).decode()
         self.ctx.close()
         super().closeEvent(e)

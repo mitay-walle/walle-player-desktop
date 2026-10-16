@@ -27,6 +27,10 @@ class AppEvents(QObject):
 
     library_changed = Signal()          # tracks added/removed (scan)
     tracks_changed = Signal(list)       # ids whose genres/moods/plays changed
+    tracks_removed = Signal(list)       # ids sent to the Recycle Bin: lists drop those rows in place (no reload)
+    hidden_changed = Signal()           # «Не показывать» / «Вернуть» (core/hidden.py)
+    listener_changed = Signal()         # likes and «Не показывать» now act for another listener
+    delete_marks_changed = Signal()     # «Пометить на удаление» list changed (core/deletemarks.py)
     navigate = Signal(str)
     show_track = Signal(int)
     favorites_changed = Signal()        # a track / album / artist was hearted or un-hearted
@@ -51,6 +55,7 @@ class Settings:
     clap_hf_home: str = ""             # folder with the CLAP weights chosen by the user (a HuggingFace home)
     window_geom: str = ""             # QMainWindow.saveGeometry() as hex: size, position, maximised
     mini_pos: list | None = None      # last position of the mini player window
+    listener: str = "owner"           # whose likes / hidden things the app shows and sets (a listener's id)
     auto_tag: bool = True            # tag new tracks with the trained model after every scan
     auto_mode: str = "balanced"      # strict | balanced | wide: how readily the model assigns moods by itself (source 'auto')
 
@@ -74,6 +79,7 @@ class AppContext:
         self.player: PlayerController = make_player(self.db, self.settings.volume,
                                                     os.environ.get("MUSICPLAYER_ENGINE") or self.settings.engine)
         self.closed = False
+        self.listener_name = ""                       # shown in tooltips when a guest is chosen (set by the window)
         self.label_clipboard: dict | None = None    # «Скопировать метки» (see core/labelclip.py)
 
     def _open_db(self) -> Database:
@@ -131,6 +137,32 @@ class AppContext:
     def open_db(self) -> Database:
         """A separate connection for worker threads (WAL allows a concurrent writer)."""
         return Database(self.db_path)
+
+    # ---- the listener the app acts for (likes, «Не показывать») ---------------------------------------------
+    @property
+    def listener(self) -> str:
+        return self.settings.listener or "owner"
+
+    def set_listener(self, uid: str, name: str = "") -> None:
+        self.listener_name = "" if uid == "owner" else name
+        if uid != self.listener:
+            self.settings.listener = uid
+            self.save_settings()
+            self.events.listener_changed.emit()
+            self.events.favorites_changed.emit()
+            self.events.hidden_changed.emit()
+
+    def is_liked(self, kind: str, key: str) -> bool:
+        from musicplayer.core import likes
+        return likes.is_liked(self.db, self.listener, kind, key)
+
+    def set_liked(self, kind: str, key: str, on: bool) -> None:
+        from musicplayer.core import likes
+        likes.set_liked(self.db, self.listener, kind, key, on)
+
+    def liked(self, kind: str) -> list[str]:
+        from musicplayer.core import likes
+        return likes.keys(self.db, self.listener, kind)
 
     def close(self) -> None:
         self.closed = True

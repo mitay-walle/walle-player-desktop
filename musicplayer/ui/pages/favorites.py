@@ -16,6 +16,19 @@ def album_key(artist: str | None, album: str | None) -> str:
     return f"{artist or ''}{SEP}{album or ''}"
 
 
+SORT_KEY = Qt.ItemDataRole.UserRole + 1
+
+
+class SortItem(QTableWidgetItem):
+    """A cell that sorts by its real value (seconds, the time it was liked, text without case) - not by the shown text."""
+
+    def __lt__(self, other) -> bool:
+        a, b = self.data(SORT_KEY), other.data(SORT_KEY)
+        if a is not None and b is not None:
+            return a < b
+        return super().__lt__(other)
+
+
 class FavoritesPage(QWidget):
     key = "favorites"
 
@@ -25,8 +38,9 @@ class FavoritesPage(QWidget):
         self.tracks: list[dict] = []
         self.tabs = QTabWidget()
         # tracks
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Название", "Исполнитель", "Альбом", "Длит."])
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["Название", "Исполнитель", "Альбом", "Длит.", "Добавлен"])
+        self.table.horizontalHeader().setToolTip("Клик по заголовку — сортировка (по дате добавления, названию …)")
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.verticalHeader().setVisible(False)
@@ -50,6 +64,10 @@ class FavoritesPage(QWidget):
         self.tabs.addTab(tw, "Треки")
         self.tabs.addTab(self.albums, "Альбомы")
         self.tabs.addTab(self.artists, "Исполнители")
+        from musicplayer.ui.hiddenlist import HiddenList
+        self.hidden = HiddenList(ctx)
+        self.tabs.addTab(self.hidden, "Скрытое")
+        ctx.events.hidden_changed.connect(self.hidden.refresh)
         self.info = QLabel()
         self.info.setObjectName("Muted")
         lay = QVBoxLayout(self)
@@ -58,8 +76,8 @@ class FavoritesPage(QWidget):
         lay.addWidget(title)
         lay.addWidget(self.info)
         lay.addWidget(self.tabs, 1)
-        self.table.cellDoubleClicked.connect(lambda r, c: ctx.player.play_tracks(self.tracks, r))
-        self.btn_play.clicked.connect(lambda: ctx.player.play_tracks(self.tracks) if self.tracks else None)
+        self.table.cellDoubleClicked.connect(lambda r, c: ctx.player.play_tracks(self.shown(), r))
+        self.btn_play.clicked.connect(lambda: ctx.player.play_tracks(self.shown()) if self.tracks else None)
         self.btn_unfav.clicked.connect(self.unfav_selected)
         self.albums.itemDoubleClicked.connect(self.play_album)
         self.artists.itemDoubleClicked.connect(self.show_artist)
@@ -67,6 +85,7 @@ class FavoritesPage(QWidget):
         self.artists.setToolTip("Двойной клик — треки исполнителя в библиотеке")
         self._dirty = True
         ctx.events.library_changed.connect(self._mark)
+        ctx.events.tracks_removed.connect(lambda ids: self._mark())
         ctx.events.favorites_changed.connect(self._mark)
 
     def _mark(self) -> None:
@@ -82,28 +101,55 @@ class FavoritesPage(QWidget):
     def refresh(self) -> None:
         self._dirty = False
         db = self.ctx.db
-        self.tracks = [t for t in (db.get_track(int(k)) for k in db.favorites("track")) if t]
+        alive = {r[0] for r in db.conn.execute("SELECT id FROM tracks WHERE missing=0")}   # deleted files drop out
+        import time as _time
+        from musicplayer.core import likes
+        when = {k: a for k, a in likes.rows(db, self.ctx.listener, "track")}
+        self.tracks = [t for t in (db.get_track(int(k)) for k in when if int(k) in alive) if t]
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(len(self.tracks))
         for i, t in enumerate(self.tracks):
-            for j, v in enumerate((t["title"], t["artist"], t["album"] or "", fmt_time(t["duration"]))):
-                self.table.setItem(i, j, QTableWidgetItem(str(v)))
+            added = when.get(str(t["id"])) or 0
+            cells = (t["title"], t["artist"], t["album"] or "", fmt_time(t["duration"]),
+                     _time.strftime("%Y-%m-%d %H:%M", _time.localtime(added)) if added else "")
+            keys = ((t["title"] or "").casefold(), (t["artist"] or "").casefold(), (t["album"] or "").casefold(),
+                    float(t["duration"] or 0), float(added))
+            for j, v in enumerate(cells):
+                it = SortItem(str(v))
+                it.setData(SORT_KEY, keys[j])
+                if j == 0:
+                    it.setData(Qt.ItemDataRole.UserRole, t["id"])
+                self.table.setItem(i, j, it)
+        self.table.setSortingEnabled(True)
+        header = self.table.horizontalHeader()
+        if not getattr(self, "_sorted_once", False):         # at first newest likes on top; a header click resorts
+            self._sorted_once = True
+            self.table.sortByColumn(4, Qt.SortOrder.DescendingOrder)
+        else:                                                 # a refresh keeps the column the user chose
+            self.table.sortByColumn(header.sortIndicatorSection(), header.sortIndicatorOrder())
         self.albums.clear()
-        for k in db.favorites("album"):
+        for k in self.ctx.liked("album"):
             artist, _, album = k.partition(SEP)
             it = QListWidgetItem(f"{album}  —  {artist}")
             it.setData(Qt.ItemDataRole.UserRole, (artist, album))
             self.albums.addItem(it)
         self.artists.clear()
-        for a in db.favorites("artist"):
+        for a in self.ctx.liked("artist"):
             it = QListWidgetItem(a)
             it.setData(Qt.ItemDataRole.UserRole, a)
             self.artists.addItem(it)
         self.info.setText(f"Треков: {len(self.tracks)} · альбомов: {self.albums.count()} · исполнителей: {self.artists.count()}")
 
+    def shown(self) -> list[dict]:
+        """The tracks in the table's current order (it may be sorted by a column)."""
+        by_id = {t["id"]: t for t in self.tracks}
+        return [by_id[self.table.item(r, 0).data(Qt.ItemDataRole.UserRole)] for r in range(self.table.rowCount())
+                if self.table.item(r, 0) is not None and self.table.item(r, 0).data(Qt.ItemDataRole.UserRole) in by_id]
+
     def unfav_selected(self) -> None:
         rows = sorted({i.row() for i in self.table.selectedIndexes()})
         for r in rows:
-            self.ctx.db.set_favorite("track", str(self.tracks[r]["id"]), False)
+            self.ctx.set_liked("track", str(self.table.item(r, 0).data(Qt.ItemDataRole.UserRole)), False)
         if rows:
             self.ctx.events.favorites_changed.emit()
 

@@ -78,6 +78,30 @@ def completeness(t: dict) -> int:
     return round(100 * sum(float(p) for p in parts) / len(parts))
 
 
+def refresh_when_shown(page, signal, refresh) -> None:
+    """Connect ``signal`` to ``refresh`` without disturbing a page that is not on screen: a hidden page only notes it
+    is stale and refreshes when it is shown again (its open album / playlist / scroll stay as they were meanwhile)."""
+    from PySide6.QtCore import QEvent, QObject
+
+    class _Shown(QObject):
+        def eventFilter(self, obj, ev):
+            if ev.type() == QEvent.Type.Show and getattr(page, "_stale", False):
+                page._stale = False
+                refresh()
+            return False
+
+    page._stale = False
+    page._shown_filter = _Shown(page)
+    page.installEventFilter(page._shown_filter)
+
+    def changed(*_):
+        if page.isVisible():
+            refresh()
+        else:
+            page._stale = True
+    signal.connect(changed)
+
+
 class TrackModel(QAbstractTableModel):
     def __init__(self, covers: CoverCache, parent=None) -> None:
         super().__init__(parent)
@@ -93,6 +117,18 @@ class TrackModel(QAbstractTableModel):
         if self.sort_keys:
             self._apply_sort()
         self.endResetModel()
+
+    def remove_ids(self, ids) -> int | None:
+        """Drop these tracks' rows in place (the view keeps its scroll); returns the first removed row or None."""
+        gone = set(ids)
+        first = None
+        for r in range(len(self.rows) - 1, -1, -1):
+            if self.rows[r]["id"] in gone:
+                self.beginRemoveRows(QModelIndex(), r, r)
+                del self.rows[r]
+                self.endRemoveRows()
+                first = r
+        return first
 
     # ---- sorting by columns (click: by this column; Ctrl+click: add it as the next key) ---------------
     def _sort_value(self, t: dict, key: str):

@@ -32,9 +32,10 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from musicplayer import __version__
+from musicplayer.core import deletemarks, hidden
 from musicplayer.core import moods as moodvocab
 from musicplayer.core.flags import FLAGS
-from musicplayer.core.genres import ERAS, GENRE_TREE
+from musicplayer.core.genres import ERAS, FAMILY_COLOURS, GENRE_TREE
 from musicplayer.core.db import TRACK_COLS, Database, weighted_order
 from musicplayer.core.wave import CHARACTERS, Wave
 
@@ -74,8 +75,7 @@ ALBUM_SEP = "\x1f"
 # the desktop labelling chips (ui/pages/library.py): languages, vocals, genre family colours
 LANGS = [("ru", "Русский"), ("en", "English"), ("ja", "日本語"), ("ko", "한국어"), ("fr", "Français"), ("other", "Другой")]
 VOCALS = [("voc", "С вокалом"), ("inst", "Инструментал")]
-GENRE_COLOURS = {"Rock": "#E8A87C", "Punk": "#F28B82", "Metal": "#AEB8C6", "Electronic": "#7FD6E0", "Hip-hop": "#C5A8F5",
-                 "Pop": "#F5A9C4", "Jazz": "#C9A27A", "Soundtrack": "#D9BE95", "Oriental": "#E0C27A"}
+GENRE_COLOURS = FAMILY_COLOURS             # the family colours, shared with the desktop app (core/genres.py)
 GUEST_SCHEMA = """
 CREATE TABLE IF NOT EXISTS remote_favorites(user TEXT, kind TEXT, key TEXT, added REAL, PRIMARY KEY(user, kind, key));
 CREATE TABLE IF NOT EXISTS remote_plays(user TEXT, track_id INTEGER, played_at REAL, listened REAL);
@@ -257,6 +257,7 @@ class Access:
         self.joins: dict[str, dict] = {}     # id -> {id, secret, name, device, address, created, status, user}
         self.lock = threading.Lock()
         self.loopback_key: str | None = None # set while the VPS tunnel runs: its visitors arrive from localhost
+        self.join_internet = True            # access requests from outside the home network (the app sets it)
         self.addresses: Callable[[], dict] = lambda: {}   # {"lan": [...], "internet": [...]} - set by the app
         self.ban_file = Path(ban_file) if ban_file else None
         self.on_ban = on_ban
@@ -283,6 +284,17 @@ class Access:
                 return str(ip.ipv4_mapped)
             return str(ipaddress.ip_network(f"{ip}/64", strict=False))
         return str(ip)
+
+    def from_home(self, addr: str) -> bool:
+        """Did the request come from the home network (or this computer)?  Through the VPS tunnel without https the
+        visitor's address is lost (localhost) - that counts as the internet."""
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            return False
+        if ip.is_loopback:
+            return not self.loopback_key
+        return ip.is_private or ip.is_link_local
 
     def _key(self, addr: str) -> str | None:
         """The ban key of a request's address; visitors through the VPS tunnel share one key (their real address
@@ -539,6 +551,9 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
         """A device without a key asks for access under a name; the owner answers in the desktop app."""
         if access.on_join is None:
             return _err(403, "access requests are off: ask the owner for a QR code")
+        if not access.join_internet and not access.from_home(Access.address(request)):
+            return JSONResponse({"error": "access requests only from the home network: connect to the home Wi-Fi "
+                                          "or ask the owner for a QR code", "code": "home_only"}, status_code=403)
         try:
             body = await request.json()
             name = " ".join(str(body.get("name") or "").split())[:40]
@@ -623,6 +638,8 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
             "year_from": _int(q.get("year")), "year_to": _int(q.get("year")),
             "order": order if order in ORDERS else "artist", "desc": q.get("desc") in ("1", "true"),
             "limit": _int(q.get("limit"), 100, 1, MAX_LIMIT), "offset": _int(q.get("offset"), 0, 0)}
+        if q.get("hidden") not in ("1", "true"):                # «Не показывать» of this listener
+            kw["hide_user"] = user["id"]
         if q.get("mood_status") in ("confirmed", "suggested", "any"):
             kw["mood_status"] = q["mood_status"]
         if q.get("not_played_days"):
@@ -679,10 +696,11 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
 
     def api_artists(request: Request, user: dict, _b):
         liked = set(lib.liked(user, "artist"))
-        return JSONResponse({"items": [r | {"liked": r["name"] in liked} for r in lib(lambda db: db.list_values("artist"))]})
+        rows = lib(lambda db: hidden.visible_values(db, user["id"], "artist", db.list_values("artist")))
+        return JSONResponse({"items": [r | {"liked": r["name"] in liked} for r in rows]})
 
     def api_albums(request: Request, user: dict, _b):
-        rows = lib(lambda db: db.list_values("album"))
+        rows = lib(lambda db: hidden.visible_values(db, user["id"], "album", db.list_values("album")))
         liked = set(lib.liked(user, "album"))
         return JSONResponse({"items": [{"name": r["name"], "artist": r["artist"], "year": r["year"], "n": r["n"],
                                         "liked": album_key(r["artist"] or "", r["name"]) in liked,
@@ -690,7 +708,43 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
                                        for r in rows]})
 
     def api_genres(request: Request, user: dict, _b):
-        return JSONResponse({"items": lib(lambda db: db.list_values("genre"))})
+        return JSONResponse({"items": lib(lambda db: hidden.visible_values(db, user["id"], "genre", db.list_values("genre")))})
+
+    def api_delete_marks(request: Request, user: dict, _b):
+        """What this listener marked «на удаление» (a client shows «Снять пометку» for them)."""
+        return JSONResponse({"items": lib(lambda db: deletemarks.marked_by(db, user["id"]))})
+
+    def api_set_delete_mark(request: Request, user: dict, body: dict):
+        """{kind: track|album, key, on}: ask the owner to delete a track / an album (on=false takes the mark back).
+        Any listener may ask; nothing is deleted here - the owner decides in the desktop app."""
+        kind, key = str(body.get("kind") or ""), str(body.get("key") or "").strip()
+        if kind not in deletemarks.KINDS or not key:
+            return _err(400, "kind: track | album, key: required")
+        on = body.get("on", True) not in (False, 0, "0", "false")
+
+        def go(db: Database):
+            exists = (db.get_track(int(key)) is not None) if kind == "track" and key.isdigit() else \
+                bool(deletemarks.album_tracks(db, key)) if kind == "album" else False
+            if on and not exists:
+                return False
+            deletemarks.set_mark(db, user["id"], kind, key, on)
+            return True
+        if not lib(go):
+            return _err(404, "no such track / album")
+        return JSONResponse({"ok": True, "kind": kind, "key": key, "on": on})
+
+    def api_hidden(request: Request, user: dict, _b):
+        """What this listener chose «Не показывать», newest first (the «Скрытое» screen)."""
+        return JSONResponse({"items": lib(lambda db: hidden.listing(db, user["id"]))})
+
+    def api_set_hidden(request: Request, user: dict, body: dict):
+        """{kind: track|album|artist|genre|mood, key, on}: hide for this listener, or show again (on=false)."""
+        kind, key = str(body.get("kind") or ""), str(body.get("key") or "").strip()
+        if kind not in hidden.KINDS or not key:
+            return _err(400, "kind: track | album | artist | genre | mood, key: required")
+        on = body.get("on", True) not in (False, 0, "0", "false")
+        lib(lambda db: hidden.set_hidden(db, user["id"], kind, key, on))
+        return JSONResponse({"ok": True, "kind": kind, "key": key, "on": on})
 
     def api_playlists(request: Request, user: dict, _b):
         rows = lib(lambda db: db.list_playlists())
@@ -775,6 +829,12 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
             return _err(400, "vocal must be voc, inst or null")
         if "flags" in body and not set(clean(body["flags"])) <= set(FLAGS):
             return _err(400, "unknown flag")
+        if "genres" in body:
+            from musicplayer.core.genres import check_latin
+            try:
+                check_latin(clean(body["genres"]))
+            except ValueError as e:
+                return _err(400, str(e))
 
         def go(db: Database):
             if not db.get_track(tid):
@@ -784,7 +844,7 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
             if body.get("reject"):
                 db.reject_moods(tid, [m for m in clean(body["reject"]) if m not in clean(body.get("moods"))])
             if "genres" in body:
-                db.set_genres([tid], clean(body["genres"]), "set")
+                db.set_genres([tid], learned(db, clean(body["genres"])), "set")
             if "flags" in body:
                 db.set_flags([tid], clean(body["flags"]), "set")
             if "lang" in body:
@@ -838,7 +898,7 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
         exclude = {i for i in (_int(x) for x in body.get("exclude") or []) if i is not None}
         n = _int(body.get("n"), 10, 1, 50)
         plays = lib.guest_plays(user)                          # a guest's wave follows his own listening
-        rows = lib(lambda db: Wave(db, moods, character, genres=genres, plays=plays).next_batch(n, exclude))
+        rows = lib(lambda db: Wave(db, moods, character, genres=genres, plays=plays, user=user["id"]).next_batch(n, exclude))
         to_json = lib.personal(user)
         return JSONResponse({"items": [to_json(t) for t in rows]})
 
@@ -877,15 +937,29 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
         lib.changed([tid])
         return JSONResponse(lib.personal(user)(t))
 
+    def learned(db: Database, genres: list[str]) -> list[str]:
+        """«Punk/Skate Punk» from a client: a genre the tree does not know becomes its sub-genre (or family) - it gets
+        a chip in every client (labels.genre_tree) - and the path gives both genres."""
+        from musicplayer.core.genres import from_paths, learn
+        paths = [g for g in genres if "/" in g]
+        if paths:
+            learn(db, ", ".join(paths))
+        return from_paths(", ".join(genres))
+
     def api_set_genres(request: Request, user: dict, body: dict):
         """The track's genres (replaces them, as editing in the desktop app; files are not touched)."""
         tid = _int(request.path_params["tid"], 0)
         genres = list(dict.fromkeys(str(g).strip() for g in body.get("genres") or [] if str(g).strip()))
+        from musicplayer.core.genres import check_latin
+        try:
+            check_latin(genres)
+        except ValueError as e:
+            return _err(400, str(e))
 
         def go(db: Database):
             if not db.get_track(tid):
                 return None
-            db.set_genres([tid], genres, "set")
+            db.set_genres([tid], learned(db, genres), "set")
             return db.get_track(tid)
         t = lib(go)
         if t is None:
@@ -934,6 +1008,10 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
         Route("/api/artists", threaded(api_artists)),
         Route("/api/albums", threaded(api_albums)),
         Route("/api/genres", threaded(api_genres)),
+        Route("/api/hidden", threaded(api_hidden)),
+        Route("/api/delete-marks", threaded(api_delete_marks)),
+        Route("/api/delete-marks", threaded(api_set_delete_mark), methods=["POST"]),
+        Route("/api/hidden", threaded(api_set_hidden), methods=["POST"]),
         Route("/api/playlists", threaded(api_playlists)),
         Route("/api/playlists/{pid:int}", threaded(api_playlist)),
         Route("/api/recent", threaded(api_recent)),

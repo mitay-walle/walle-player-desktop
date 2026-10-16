@@ -107,9 +107,17 @@ def iter_audio(root: Path):
                 yield Path(dp) / f
 
 
+def _eta(seconds: float) -> str:
+    s = int(seconds)
+    return f"~{s // 60} мин {s % 60:02d} с" if s >= 60 else f"~{max(s, 1)} с"
+
+
 def scan(db: Database, root: str | Path, cover_dir: str | Path,
-         progress: Callable[[int, str], None] | None = None, full: bool = False) -> dict:
-    """Scan ``root``: new/changed files are (re)read, vanished ones marked missing."""
+         progress: Callable[[int, int, str], None] | None = None, full: bool = False) -> dict:
+    """Scan ``root``: new/changed files are (re)read, vanished ones marked missing.
+
+    ``progress(done, total, message)``: first the file list is collected (total 0, «найдено N файлов»), then every
+    file is checked against the catalogue (done / total, what is new or changed, the folder, time left)."""
     root, cover_dir = Path(root), Path(cover_dir)
     if not root.is_dir():  # an unplugged drive must never mark the whole library as missing
         raise FileNotFoundError(f"Папка не найдена: {root}")
@@ -117,10 +125,25 @@ def scan(db: Database, root: str | Path, cover_dir: str | Path,
     seen: set[str] = set()
     added = updated = 0
     errors: list[tuple[str, str]] = []
+    files: list[Path] = []
+    t_list = 0.0
+    for p in iter_audio(root):                           # listing is fast (seconds), and gives the real total
+        files.append(p)
+        if progress and time.monotonic() - t_list > 0.25:
+            t_list = time.monotonic()
+            progress(0, 0, f"Ищу файлы: найдено {len(files)}")
+    total = len(files)
     db.conn.execute("BEGIN")
-    t_commit = time.monotonic()
+    t_commit = t0 = t_prog = time.monotonic()
     try:
-        for i, p in enumerate(iter_audio(root), 1):
+        for i, p in enumerate(files, 1):
+            if progress and (time.monotonic() - t_prog > 0.2 or i == total):
+                t_prog = time.monotonic()
+                el = t_prog - t0
+                left = f" · осталось {_eta(el / i * (total - i))}" if i > 20 and el > 2 else ""
+                news = ", ".join(x for x in (f"новых {added}" if added else "", f"изменено {updated}" if updated
+                                             else "") if x) or "без изменений"
+                progress(i, total, f"{news}{left} · {p.parent.parent.name}/{p.parent.name}")
             if time.monotonic() - t_commit > 0.3:       # short write transactions: the player and the library
                 db.conn.execute("COMMIT")                # server must be able to write (plays, labels) meanwhile
                 db.conn.execute("BEGIN")
@@ -142,8 +165,8 @@ def scan(db: Database, root: str | Path, cover_dir: str | Path,
                     updated += 1
             except Exception as e:  # an unreadable file must not abort the scan
                 errors.append((sp, str(e)))
-            if progress and i % 50 == 0:
-                progress(i, sp)
+        if progress:
+            progress(total, total, f"новых {added}, изменено {updated} · сверяю пропавшие")
         prefix = str(root)
         gone = [p for p in known if p not in seen and p.startswith(prefix)]
         if not seen and gone:

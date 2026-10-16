@@ -10,12 +10,12 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget
 
 from musicplayer.ui.widgets import FlowLayout
 from musicplayer.core.wave import CHARACTERS, Wave
 from musicplayer.ui.context import AppContext
-from musicplayer.ui.pages.library import MoodChips
+from musicplayer.ui.pages.library import GenreChips, MoodChips
 from musicplayer.ui.theme import TOKENS
 from musicplayer.ui.widgets import CoverCache
 
@@ -39,6 +39,8 @@ class WavePage(QWidget):
         self.heading = QLabel("Моя волна")
         self.heading.setStyleSheet("font-size:26px; font-weight:700;")
         self.chips = MoodChips()
+        self.genre_chips = GenreChips()             # families; a chosen family opens its sub-genres
+        self.genre_chips.set_selected(())
         self.char_buttons: dict[str, QPushButton] = {}
         chars_holder = QWidget()
         chars_holder.setObjectName("segmented")
@@ -65,6 +67,9 @@ class WavePage(QWidget):
         self.sub = QLabel()
         self.sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.sub.setStyleSheet(f"color:{TOKENS['text_muted']}")
+        for w in (self.title, self.sub):                 # the playing track's text can be selected and copied
+            w.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            w.setCursor(Qt.CursorShape.IBeamCursor)
         self.badge = QLabel()
         self.badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.badge.setWordWrap(True)
@@ -81,8 +86,9 @@ class WavePage(QWidget):
         self.btn_play = QPushButton()
         self.btn_like = QPushButton("👍")
         self.btn_next = QPushButton("▶▶")
-        self.btn_other = QPushButton("✎")
-        self.btn_other.setToolTip("Все метки этого трека: настроения, тип записи, язык, вокал, жанры, эпоха")
+        self.btn_other = QPushButton()
+        self.btn_other.setToolTip("Разметить трек: настроения, тип записи, язык, вокал, жанры, эпоха")
+        self.btn_hide = QPushButton()
         self.btn_play.setFixedSize(72, 72)
         from PySide6.QtWidgets import QGraphicsDropShadowEffect
         from PySide6.QtGui import QColor as _QC
@@ -99,13 +105,14 @@ class WavePage(QWidget):
         from musicplayer.ui.icons import icon, make_icon_button
         for b, name, tip in ((self.btn_dislike, "thumb_down", "Не нравится / модель ошиблась"),
                              (self.btn_like, "thumb_up", "Нравится / модель права"),
-                             (self.btn_next, "next", "Следующий"), (self.btn_other, "edit", self.btn_other.toolTip())):
+                             (self.btn_next, "next", "Следующий"), (self.btn_other, "tag", self.btn_other.toolTip()),
+                             (self.btn_hide, "hide", "Не показывать: этот трек, альбом или исполнителя")):
             make_icon_button(b, name, TOKENS["text"], 30, tip)
             b.setFixedSize(56, 56)
         self._icon = icon
         controls = QHBoxLayout()
         controls.addStretch(1)
-        for b in (self.btn_dislike, self.btn_other, self.btn_play, self.btn_like, self.btn_next):
+        for b in (self.btn_hide, self.btn_dislike, self.btn_other, self.btn_play, self.btn_like, self.btn_next):
             controls.addWidget(b)
         controls.addStretch(1)
 
@@ -136,6 +143,10 @@ class WavePage(QWidget):
         hint.setWordWrap(True)
         col.addWidget(hint)
         col.addWidget(self.chips)
+        ghint = QLabel("ЖАНР — без выбора любой; поджанр сужает семейство")
+        ghint.setStyleSheet("color:#92928F; font-size:10px; letter-spacing:1px;")
+        col.addWidget(ghint)
+        col.addWidget(self.genre_chips)
         col.addWidget(chars_holder)
         col.addStretch(1)
         col.addWidget(self.cover)
@@ -147,27 +158,46 @@ class WavePage(QWidget):
         col.addLayout(controls)
         col.addWidget(self.fix_box)
         col.addWidget(self.toast)
+        from musicplayer.ui.labelpanel import LabelPanel
+        self.labels = LabelPanel(ctx)                    # the playing track's labels right here (apply to track / album / artist)
+        self.labels.applied.connect(self.toast.setText)
+        col.addWidget(self.labels)
         col.addStretch(2)
-        lay = QHBoxLayout(self)
+        inner = QWidget()
+        lay = QHBoxLayout(inner)
         lay.addStretch(1)
         wrap = QWidget()
         wrap.setMaximumWidth(1000)
         wrap.setLayout(col)
         lay.addWidget(wrap, 4)
         lay.addStretch(1)
+        scroll = QScrollArea()                           # the labels make the page tall: it scrolls on small windows
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(inner)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
 
         self.chips.toggled.connect(self._mood_toggled)
+        self._genre_timer = QTimer(self, singleShot=True, interval=0)   # a sub-genre click also lights its family
+        self._genre_timer.timeout.connect(self._retarget)
+        self.genre_chips.toggled.connect(lambda *_: self._genre_timer.start())
         self.btn_play.clicked.connect(self.play_pressed)
         self.btn_like.clicked.connect(lambda: self.rate(True))
         self.btn_dislike.clicked.connect(lambda: self.rate(False))
         self.btn_next.clicked.connect(self.skip)
-        self.btn_other.clicked.connect(self.open_tags)
+        self.btn_other.clicked.connect(self.labels_menu)
+        from musicplayer.ui.hideactions import current_track_menu
+        self.btn_hide.clicked.connect(lambda: current_track_menu(ctx, self.btn_hide))
         self.fix_chips.toggled.connect(self._fix_toggled)
         self.btn_fix_save.clicked.connect(self.save_fix)
         self.btn_fix_skip.clicked.connect(self.reject_and_skip)
         self.btn_fix_cancel.clicked.connect(self.close_fix)
         self.empty_btn.clicked.connect(self._empty_action)
         ctx.player.track_changed.connect(self._on_track)
+        ctx.player.track_changed.connect(self.labels.load)
+        ctx.events.tracks_changed.connect(self._labels_changed_elsewhere)
         self.suspended: dict | None = None
         self._last: dict | None = None
         self._remember_timer = QTimer(self, interval=1000)
@@ -175,6 +205,16 @@ class WavePage(QWidget):
         self._remember_timer.start()
         ctx.player.state_changed.connect(lambda s: self._render())
         ctx.events.library_changed.connect(self.reload)
+        ctx.events.tracks_removed.connect(lambda ids: self.reload())
+        ctx.events.hidden_changed.connect(self._hidden_changed)
+        from musicplayer.ui.hideactions import chip_menu
+
+        def genre_menus() -> None:
+            for g, b in self.genre_chips.buttons.items():
+                chip_menu(b, ctx, "genre", g)
+        genre_menus()
+        self.genre_chips.rebuilt.connect(genre_menus)
+        ctx.events.tracks_changed.connect(lambda ids: self.genre_chips.refresh_tree())
         ctx.events.tracks_changed.connect(lambda ids: self._render())
         self._empty_target = ""
         self.reload()
@@ -184,8 +224,41 @@ class WavePage(QWidget):
         names = [m["name"] for m in self.ctx.db.list_moods()]
         if self.chips.needs_update(names):
             self.chips.set_moods(names)
+            from musicplayer.ui.hideactions import chip_menu
+            for n, b in self.chips.buttons.items():
+                chip_menu(b, self.ctx, "mood", n)
         self.chips.set_counts(self.ctx.db.mood_example_counts())
+        self._hide_chips()
         self._render()
+
+    def _hide_chips(self) -> None:
+        """Genres and labels the chosen listener hid are not offered (and leave the current choice)."""
+        from musicplayer.core import hidden
+        h = hidden.keys(self.ctx.db, self.ctx.listener)
+        for n, b in self.chips.buttons.items():
+            b.setVisible(n.casefold() not in h["mood"])
+        self.genre_chips.set_hidden(h["genre"])
+        moods = {m for m in self.selected if m.casefold() not in h["mood"]}
+        genres = {g for g in self.genre_chips.selected() if g.casefold() not in h["genre"]}
+        if moods != self.selected or genres != self.genre_chips.selected():
+            self.selected = moods
+            self.genre_chips.set_selected(genres)
+            self.genre_chips.set_hidden(h["genre"])
+            self._retarget()
+
+    def _labels_changed_elsewhere(self, ids) -> None:
+        """Labels changed in another window: the panel shows them, unless it holds changes not applied yet."""
+        t = self.labels.track
+        if t is not None and (not ids or t["id"] in ids) and not self.labels.dirty():
+            self.labels.load(t)
+
+    def _hidden_changed(self) -> None:
+        """«Не показывать» while the wave plays: the coming tracks follow at once (the current one plays on)."""
+        self._hide_chips()
+        if self.active:
+            self.wave = self._make_wave()
+            self.ctx.player.drop_upcoming()
+            self._refill()
 
     def _counts(self) -> tuple[int, int]:
         c = self.ctx.db.conn
@@ -218,8 +291,21 @@ class WavePage(QWidget):
             self._refill()
         self._render()
 
+    def wave_genres(self) -> list[str]:
+        """What the wave filters by: a family, or only its chosen sub-genres when some are lit."""
+        sel = self.genre_chips.selected()
+        tree = self.genre_chips.tree
+        out = []
+        for g in sorted(sel):
+            subs = [s for s in tree.get(g, []) if s in sel]
+            if g in tree:
+                out += subs or [g]
+            elif self.genre_chips.parent_of.get(g) not in sel:
+                out.append(g)
+        return sorted(set(out))
+
     def _make_wave(self) -> Wave:
-        return Wave(self.ctx.db, sorted(self.selected), self.character)
+        return Wave(self.ctx.db, sorted(self.selected), self.character, genres=self.wave_genres(), user=self.ctx.listener)
 
     # ---- playback -----------------------------------------------------
     def start(self, moods: list[str] | None = None, character: str | None = None) -> int:
@@ -233,7 +319,9 @@ class WavePage(QWidget):
         batch = self.wave.next_batch(BATCH)
         if not batch:
             self.active = False
-            self.toast.setText("Нет подходящих треков: разметьте несколько настроением (вкладка «Разметка»).")
+            self.toast.setText("Нет подходящих треков: снимите часть настроений или жанров, или разметьте ещё треки "
+                               "(вкладка «Разметка»)." if self.selected or self.wave_genres() else
+                               "Нет подходящих треков: разметьте несколько настроением (вкладка «Разметка»).")
             self._render()
             return 0
         self.active = True
@@ -253,7 +341,7 @@ class WavePage(QWidget):
             susp = {**susp, "items": [t["id"] for t in susp["items"]],
                     "meta": {str(t["id"]): [t["wave_kind"], t.get("wave_moods", []), t.get("wave_conf")] for t in susp["items"]}}
         return {"active": bool(self.active), "moods": sorted(self.selected), "character": self.character, "meta": meta,
-                "suspended": susp}
+                "genres": sorted(self.genre_chips.selected()), "suspended": susp}
 
     def restore_session(self, state: dict | None, tracks: list[dict]) -> list[dict]:
         """Restore the chosen moods / character; when the wave was playing, mark the restored queue as wave tracks."""
@@ -264,6 +352,7 @@ class WavePage(QWidget):
         self.character = state.get("character") or self.character
         for k, b in self.char_buttons.items():
             b.setChecked(k == self.character)
+        self.genre_chips.set_selected(state.get("genres", []))
         susp = state.get("suspended")
         if susp:
             items = []
@@ -293,7 +382,7 @@ class WavePage(QWidget):
         if self.active and p.current is not None and "wave_kind" in p.current and q.items:
             self._last = {"items": [t for t in q.items if "wave_kind" in t], "current": p.current["id"],
                           "pos": float(p.deck.player.position()) / 1000 if hasattr(p, "deck") else 0.0,
-                          "moods": sorted(self.selected), "character": self.character}
+                          "moods": sorted(self.selected), "character": self.character, "genres": self.wave_genres()}
 
     def _suspend(self) -> None:
         if getattr(self, "_last", None):
@@ -302,7 +391,7 @@ class WavePage(QWidget):
     def resume(self) -> bool:
         """Continue the interrupted wave at its track and second (same moods and character only)."""
         s = getattr(self, "suspended", None)
-        if not s or s["moods"] != sorted(self.selected) or s["character"] != self.character:
+        if not s or s["moods"] != sorted(self.selected) or s["character"] != self.character                 or s.get("genres", []) != self.wave_genres():
             return False
         items = s["items"]
         idx = next((i for i, t in enumerate(items) if t["id"] == s["current"]), None)
@@ -370,6 +459,13 @@ class WavePage(QWidget):
     def _fixable(self) -> dict | None:
         cur = self.ctx.player.current
         return cur if (self.active and cur and "wave_kind" in cur) else None
+
+    def labels_menu(self) -> None:
+        """The tag button: labels of the track, its album or its artist (the same menu as in the player bar)."""
+        from musicplayer.ui.tagpopup import TagPopup, labels_menu
+        if not hasattr(self, "_tags"):
+            self._tags = TagPopup(self.ctx, self)
+        labels_menu(self.ctx, self.btn_other, self._tags)
 
     def open_tags(self) -> None:
         """✎: the full labelling popup (the same as «Метки» in the player bar) for the playing track."""
@@ -454,6 +550,7 @@ class WavePage(QWidget):
         rated = bool(live and self.rated_id == cur["id"])
         self.btn_next.setEnabled(live)
         self.btn_other.setEnabled(live)          # labels stay editable after rating
+        self.btn_hide.setEnabled(live)
         for b, name in ((self.btn_like, "thumb_up"), (self.btn_dislike, "thumb_down")):
             b.setEnabled(live and not rated)
             b.setIcon(self._icon(name, TOKENS["text_dim"] if rated or not live else TOKENS["text"], 30))

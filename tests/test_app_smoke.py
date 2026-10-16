@@ -338,17 +338,6 @@ def test_window_geometry_is_remembered(qtbot, tmp_path, library):
     c2.close()
 
 
-def test_compact_playback_view_toggle(qtbot, app):
-    ctx, win = app
-    win.show()
-    win.resize(900, 600)
-    full = win.height()
-    win.player_bar.btn_compact.click()
-    assert win.body_w.isHidden() and win.height() < 200
-    win.player_bar.btn_compact.click()
-    assert win.body_w.isVisible() and win.height() == full
-
-
 def test_language_vocal_and_explicit_flag_from_popup(qtbot, app, library):
     from musicplayer.ui.tagpopup import TagPopup
     ctx, win = app
@@ -414,6 +403,36 @@ def test_genre_era_chips_and_trash(qtbot, app, library, monkeypatch):
     gone = []
     res = trash.trash_tracks(ctx.db, [ctx.db.get_track(t["id"])], remover=lambda p: gone.append(p) or True)
     assert res["deleted"] == 1 and gone and ctx.db.get_track(t["id"])["id"] not in [r["id"] for r in ctx.db.search(limit=100)]
+
+
+def test_trash_confirmation_answers_enter_and_escape(qtbot, app, library, monkeypatch):
+    """«Удалить файлы?»: Enter deletes, Escape cancels; asked from the ✎ popup, the popup steps aside first
+    (it keeps the keyboard otherwise and the keys never reach the question)."""
+    from PySide6.QtCore import QTimer, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from musicplayer.core import trash
+    from musicplayer.ui.tagpopup import TagPopup
+    ctx, win = app
+    win.start_scan(str(library))
+    wait_job(qtbot, ctx)
+    t = ctx.db.search(limit=1)[0]
+    calls, seen = [], []
+    monkeypatch.setattr(trash, "trash_tracks", lambda db, tracks: calls.append(tracks) or {"deleted": len(tracks), "failed": []})
+    pop = TagPopup(ctx)
+    qtbot.addWidget(pop)
+
+    def answer(key):
+        box = QApplication.activeModalWidget()
+        seen.append((box is not None, pop.isVisible()))
+        QTest.keyClick(box, key)
+
+    for key, deleted in ((Qt.Key.Key_Escape, 0), (Qt.Key.Key_Return, 1)):
+        pop.open_for(t, win.player_bar.btn_tags)
+        QTimer.singleShot(150, lambda k=key: answer(k))
+        pop._trash()
+        assert len(calls) == deleted
+    assert seen == [(True, False), (True, False)]
 
 
 def test_session_restore_and_history(qtbot, tmp_path, library):
@@ -506,6 +525,53 @@ def test_single_instance(qtbot):
     first.close()
 
 
+def test_second_start_shows_or_quits_the_running_one(qtbot):
+    """A normal second start brings the window up; ``--quit`` makes the running app close the normal way.
+    The second start is a real separate process (in one process the client would block the server's reading)."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    from musicplayer.ui.app import claim_single_instance, quit_running, serve_instance
+    key = "WallePlayer-test-quit"
+    first = claim_single_instance(key)
+    calls = []
+    serve_instance(first, lambda: calls.append("show"), lambda: (calls.append("quit"), first.close()))
+    root = Path(__file__).resolve().parent.parent
+
+    def second(message: bytes) -> subprocess.Popen:
+        code = ("import sys; sys.path.insert(0, %r)\n"
+                "from PySide6.QtCore import QCoreApplication\napp = QCoreApplication([])\n"
+                "from musicplayer.ui.app import claim_single_instance\n"
+                "sys.exit(0 if claim_single_instance(%r, %r) is None else 3)") % (str(root), key, message)
+        return subprocess.Popen([sys.executable, "-c", code])
+
+    p = second(b"show")
+    qtbot.waitUntil(lambda: calls == ["show"], timeout=15000)
+    qtbot.waitUntil(lambda: p.poll() is not None, timeout=15000)
+    assert p.returncode == 0
+    p = second(b"quit")
+    qtbot.waitUntil(lambda: calls == ["show", "quit"], timeout=15000)
+    qtbot.waitUntil(lambda: p.poll() is not None, timeout=15000)
+    assert quit_running("WallePlayer-test-nobody", timeout=1) == 1        # nothing running: says so at once
+
+
+def test_redirected_data_folder_is_noticed(tmp_path, monkeypatch):
+    """Started from a packaged app (the Claude terminal) the app's writes land in Packages\\...\\LocalCache: noticed by a
+    probe file, so the exe can start itself again outside.  A normal start is not mistaken for it."""
+    import os
+    from musicplayer.ui import app as appmod
+    monkeypatch.delenv("MUSICPLAYER_HOME", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert appmod.redirected_data_dir() is None                          # writes stay where they were made
+    pkg = tmp_path / "Packages" / "Some.App_123" / "LocalCache" / "Local" / "WallePlayer"
+    pkg.mkdir(parents=True)
+    monkeypatch.setattr(os, "getpid", lambda: 4242)
+    (pkg / ".where-4242").write_text("")                                  # as if Windows had redirected the probe
+    assert appmod.redirected_data_dir() == pkg
+    monkeypatch.setenv("MUSICPLAYER_HOME", str(tmp_path / "own"))        # an explicit data folder: never relaunched
+    assert appmod.redirected_data_dir() is None
+
+
 def test_wave_choice_kept_without_playing(qtbot, tmp_path):
     from musicplayer.ui.context import AppContext
     from musicplayer.ui.main_window import MainWindow
@@ -522,6 +588,36 @@ def test_wave_choice_kept_without_playing(qtbot, tmp_path):
     qtbot.addWidget(w2)
     qtbot.waitUntil(lambda: w2.pages["wave"].selected == {name}, timeout=3000)
     assert w2.pages["wave"].character == "weak" and w2.pages["wave"].char_buttons["weak"].isChecked()
+    c2.close()
+
+
+def test_wave_genres_narrow_by_sub_genre_and_survive_restart(qtbot, tmp_path):
+    """My wave has the genre chips: a family filters by the whole family, a lit sub-genre narrows it; the choice is
+    kept like the moods.  Family colours come from the shared vocabulary (Russian names)."""
+    from PySide6.QtCore import Qt
+    from musicplayer.core.genres import FAMILY_COLOURS
+    from musicplayer.ui.context import AppContext
+    from musicplayer.ui.main_window import MainWindow
+    home = tmp_path / "wg"
+    c1 = AppContext(home)
+    w1 = MainWindow(c1)
+    qtbot.addWidget(w1)
+    wave = w1.pages["wave"]
+    chips = wave.genre_chips
+    assert FAMILY_COLOURS["Punk"] in chips.buttons["Punk"].styleSheet()
+    assert not chips.buttons["Pop Punk"].isVisibleTo(chips)              # sub-genres open with their family
+    qtbot.mouseClick(chips.buttons["Punk"], Qt.MouseButton.LeftButton)
+    assert chips.buttons["Pop Punk"].isVisibleTo(chips)
+    qtbot.waitUntil(lambda: wave._make_wave().genres == ["Punk"], timeout=2000)
+    qtbot.mouseClick(chips.buttons["Pop Punk"], Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(chips.buttons["Metal"], Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(lambda: (c1.settings.wave or {}).get("genres") == ["Metal", "Pop Punk", "Punk"], timeout=2000)
+    assert wave.wave_genres() == ["Metal", "Pop Punk"]
+    c1.close()
+    c2 = AppContext(home)
+    w2 = MainWindow(c2)
+    qtbot.addWidget(w2)
+    qtbot.waitUntil(lambda: w2.pages["wave"].wave_genres() == ["Metal", "Pop Punk"], timeout=3000)
     c2.close()
 
 
@@ -637,12 +733,43 @@ def test_delete_key_asks_and_recycles(qtbot, app, library, monkeypatch):
     tid = lib.view.selected_ids()[0]
     gone = []
     monkeypatch.setattr(trash, "to_recycle_bin", lambda p: gone.append(p) or True)
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(QMessageBox, "exec", lambda box: (box.defaultButton().click(), 0)[1])   # «Удалить» (Enter)
     win.activateWindow()
     qtbot.waitUntil(lambda: win.isActiveWindow(), timeout=3000)
     lib.view.setFocus()
     qtbot.keyClick(lib.view, Qt.Key.Key_Delete)
     assert gone and tid not in [r["id"] for r in ctx.db.search(limit=100)]
+
+
+def test_delete_keeps_the_shown_list_and_selects_the_next_track(qtbot, app, library, monkeypatch):
+    """Delete in an opened album (or a search, a playlist ...): the row goes, the album stays open with its scroll, the
+    next track is selected - the library is not reloaded and other pages keep what they show."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QMessageBox
+    from musicplayer.core import trash
+    ctx, win = app
+    win.start_scan(str(library))
+    wait_job(qtbot, ctx)
+    win.show()
+    win.set_page("library")
+    lib = win.pages["library"]
+    kino = [t for t in ctx.db.search(limit=100) if t["artist"] == "Кино"]
+    assert len(kino) == 2
+    lib.set_rows(kino, "Альбом «Группа крови»")
+    lib.view.selectRow(0)
+    first, second = lib.model.rows[0]["id"], lib.model.rows[1]["id"]
+    reloads = []
+    ctx.events.library_changed.connect(lambda: reloads.append(True))
+    monkeypatch.setattr(trash, "to_recycle_bin", lambda p: True)
+    monkeypatch.setattr(QMessageBox, "exec", lambda box: (box.defaultButton().click(), 0)[1])
+    win.activateWindow()
+    qtbot.waitUntil(lambda: win.isActiveWindow(), timeout=3000)
+    lib.view.setFocus()
+    qtbot.keyClick(lib.view, Qt.Key.Key_Delete)
+    assert [r["id"] for r in lib.model.rows] == [second]             # the album is still shown, one row less
+    assert lib.count_label.text() == "Альбом «Группа крови»: 1"
+    assert lib.view.selected_ids() == [second] and not reloads
+    assert first not in [r["id"] for r in ctx.db.search(limit=100)]
 
 
 def test_edit_dialog_and_artists_page(qtbot, app, library):

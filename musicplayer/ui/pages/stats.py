@@ -69,6 +69,7 @@ class StatsPage(QWidget):
         self.period.currentIndexChanged.connect(self.refresh)
         ctx.events.tracks_changed.connect(lambda ids: self.refresh() if self.isVisible() else setattr(self, "_dirty", True))
         ctx.events.library_changed.connect(self.refresh)
+        ctx.events.tracks_removed.connect(lambda ids: self.refresh() if self.isVisible() else setattr(self, "_dirty", True))
         self.top_tracks.cellDoubleClicked.connect(lambda r, c: self._play(self.top_tracks, r))
         self.stale.cellDoubleClicked.connect(lambda r, c: self._play(self.stale, r))
         self.refresh()

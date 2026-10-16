@@ -36,7 +36,11 @@ def windows(path: str):
     from scipy.signal import resample_poly
     from math import gcd
 
-    with sf.SoundFile(path) as f:
+    try:
+        f = sf.SoundFile(path)
+    except sf.LibsndfileError:                          # AAC (.m4a): ffmpeg decodes the whole file at 48 kHz
+        return _windows_ffmpeg(path)
+    with f:
         sr, frames = int(f.samplerate), int(f.frames)
         span = 10 * sr
         starts = [0] if frames <= span else [max(0, int(frames * q) - span // 2) for q in (0.25, 0.5, 0.75)]
@@ -49,6 +53,22 @@ def windows(path: str):
                 x = resample_poly(x, SR // g, sr // g).astype("float32")
             res.append(x[:WIN])
     return res
+
+
+def _windows_ffmpeg(path: str):
+    import shutil
+    import subprocess
+    import numpy as np
+    exe = shutil.which("ffmpeg") or os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Links",
+                                                 "ffmpeg.exe")
+    r = subprocess.run([exe, "-v", "error", "-nostdin", "-i", path, "-vn", "-ac", "1", "-ar", str(SR), "-f", "f32le",
+                        "-"], capture_output=True, timeout=300, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    x = np.frombuffer(r.stdout, dtype="<f4").astype("float32")
+    if not x.size:
+        raise RuntimeError("ffmpeg: " + r.stderr.decode("utf-8", "replace")[:200])
+    frames, span = x.size, 10 * SR
+    starts = [0] if frames <= span else [max(0, int(frames * q) - span // 2) for q in (0.25, 0.5, 0.75)]
+    return [x[s:s + span][:WIN] for s in starts]
 
 
 def main() -> int:

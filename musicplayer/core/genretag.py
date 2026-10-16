@@ -6,7 +6,7 @@ Only the catalogue is changed (track_genres, mode "add"); the music files are no
 from __future__ import annotations
 
 from .db import Database
-from .genres import GENRE_TREE, PARENT
+from .genres import GENRE_TREE, PARENT, canonical
 from .jobs import JobContext
 from .webtags import Http, _ensure, artist_tags
 
@@ -19,7 +19,7 @@ SUB_RULES = [
     ("alternative", "Alternative"), ("drum and bass", "Drum and bass"), ("drum & bass", "Drum and bass"),
     ("drum n bass", "Drum and bass"), ("dnb", "Drum and bass"), ("jungle", "Drum and bass"), ("synthwave", "Synthwave"),
     ("retrowave", "Synthwave"), ("outrun", "Synthwave"), ("darksynth", "Synthwave"), ("ambient", "Ambient"),
-    ("techno", "Techno"), ("grime", "Grime"), ("russian hip hop", "Русский рэп"), ("russian rap", "Русский рэп"),
+    ("techno", "Techno"), ("grime", "Grime"), ("russian hip hop", "Russian Rap"), ("russian rap", "Russian Rap"),
     ("video game", "Games"), ("game music", "Games"), ("vgm", "Games"), ("chiptune", "8-bit"), ("8-bit", "8-bit"), ("8bit", "8-bit"),
     ("bitpop", "8-bit"), ("nintendocore", "8-bit"),
 ]
@@ -55,13 +55,15 @@ def map_tags(tags: list[list], lang: str | None = None) -> list[str]:
             sub = None                                   # "emotional", "demo" ... are not emo
         if sub == "Techno" and "techno" not in tag.split():
             sub = None if "technical" in tag else sub
+        sub = canonical(sub)[0] if sub else None          # the rules speak English; the catalogue - Russian
         if sub and sub not in subs:
             subs.append(sub)
         fam = PARENT.get(sub) if sub else next((g for k, g in FAMILY_RULES if k in tag), None)
+        fam = canonical(fam)[0] if fam else None
         if fam and fam not in fams:
             fams.append(fam)
-    if "Hip-hop" in fams and lang == "ru" and "Русский рэп" not in subs:
-        subs.append("Русский рэп")
+    if "Hip-Hop" in fams and lang == "ru" and "Russian Rap" not in subs:
+        subs.append("Russian Rap")
     fams = fams[:2]
     subs = [s for s in subs if PARENT[s] in fams][:3]
     return fams + subs

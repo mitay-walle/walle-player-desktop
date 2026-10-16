@@ -87,6 +87,7 @@ class RemoteSharing(QObject):
         self._save()
         if ok:
             self.server.access.addresses = self.addresses
+            self.server.access.join_internet = self.cfg.join_from_internet
             self.refresh_ipv6()
             self.apply_net()
         if ok and self.cfg.tunnel:
@@ -237,6 +238,12 @@ class RemoteSharing(QObject):
 
     def remove_user(self, uid: str) -> None:
         config.remove_user(self.cfg, uid)
+        self._save()
+
+    def set_join_internet(self, on: bool) -> None:
+        self.cfg.join_from_internet = bool(on)
+        if self.server is not None:
+            self.server.access.join_internet = bool(on)
         self._save()
 
     def set_allow_join(self, on: bool) -> None:
@@ -407,16 +414,30 @@ class ShareDialog(QDialog):
         self.btn_add.setToolTip("Новый слушатель со своим QR-кодом: свои лайки и история прослушиваний")
         self.btn_del = QPushButton("Удалить")
         self.btn_ren = QPushButton("Переименовать…")
+        self.btn_likes = QPushButton("Импорт лайков…")
+        self.btn_likes.setToolTip("Лайки этого слушателя из файла: текст «Исполнитель — Название», CSV, JSON или M3U")
         urow.addWidget(self.btn_add)
         urow.addWidget(self.btn_ren)
+        urow.addWidget(self.btn_likes)
         urow.addWidget(self.btn_del)
         lay.addLayout(urow)
         self.can_label = QCheckBox("Может размечать настроения и жанры (это учит вашу модель настроений)")
         lay.addWidget(self.can_label)
-        self.allow_join = QCheckBox("Новые устройства могут попросить доступ — без QR, вы подтверждаете здесь")
+        jrow = QHBoxLayout()
+        self.allow_join = QCheckBox("Новые устройства могут попросить доступ из домашней сети — без QR, вы подтверждаете здесь")
         self.allow_join.setChecked(sharing.cfg.allow_join)
         self.allow_join.toggled.connect(sharing.set_allow_join)
-        lay.addWidget(self.allow_join)
+        self.join_internet = QCheckBox("…и из интернета")
+        self.join_internet.setToolTip("Обычно незачем: из интернета кто угодно может засыпать вас запросами. "
+                                      "Новых слушателей проще добавить дома или по QR")
+        self.join_internet.setChecked(sharing.cfg.join_from_internet)
+        self.join_internet.setEnabled(sharing.cfg.allow_join)
+        self.join_internet.toggled.connect(sharing.set_join_internet)
+        self.allow_join.toggled.connect(self.join_internet.setEnabled)
+        jrow.addWidget(self.allow_join)
+        jrow.addWidget(self.join_internet)
+        jrow.addStretch(1)
+        lay.addLayout(jrow)
         from musicplayer.ui import tray
         self.autostart = QCheckBox("Запускать вместе с Windows — в трее, библиотека сразу открыта для устройств")
         self.autostart.setChecked(tray.autostart_enabled())
@@ -515,6 +536,7 @@ class ShareDialog(QDialog):
         self.btn_add.clicked.connect(self._add_user)
         self.btn_del.clicked.connect(self._del_user)
         self.btn_ren.clicked.connect(self._rename_user)
+        self.btn_likes.clicked.connect(self._import_likes)
         self.can_label.toggled.connect(lambda on: self.sharing.set_can_label(self.user.currentData(), on))
         self.btn_copy.clicked.connect(self._copy)
         self.btn_key.clicked.connect(self._new_key)
@@ -854,6 +876,13 @@ class ShareDialog(QDialog):
         u = self.sharing.add_user(name.strip())
         self._refresh()
         self.user.setCurrentIndex(self.user.findData(u["id"]))
+
+    def _import_likes(self) -> None:
+        from musicplayer.ui.likeimport_dialog import import_likes
+        u = self.selected_user()
+        n = import_likes(self.sharing.ctx, u, self)
+        if n and u:
+            self.status.setText(f"Лайки «{u['name']}»: добавлено {n}.")
 
     def _rename_user(self) -> None:
         u = self.selected_user()
