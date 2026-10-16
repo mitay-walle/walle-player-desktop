@@ -27,6 +27,7 @@ class RemoteConfig:
     tunnel: bool = False            # also start the Cloudflare quick tunnel (internet access) at launch
     public_url: str = ""            # the address from outside (KeenDNS, own VPS, a tunnel service): goes into the QR
     allow_join: bool = True         # a new device may ask for access under a name; the owner answers in the app
+    join_from_internet: bool = False  # ... also from outside the home network (off: from the home Wi-Fi only)
     library_id: str = ""            # stable id of this library: clients find it again when the address changes
     # internet access: off | static (provider's static IP, port forwarded on the router, UPnP) | relay (own VPS,
     # reverse SSH tunnel) | manual (an address set up elsewhere: KeenDNS, a tunnel service...)

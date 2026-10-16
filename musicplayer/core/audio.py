@@ -2,6 +2,8 @@
 
 Everything here reads only what it needs: ``load_mono`` reads a single frame
 window, ``waveform_peaks`` streams block by block. Nothing imports torch.
+
+libsndfile does not read AAC (.m4a): such files are decoded by ffmpeg when it is installed (``ffmpeg_exe``).
 """
 
 from __future__ import annotations
@@ -10,6 +12,8 @@ import hashlib
 import logging
 import math
 import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -52,6 +56,57 @@ def resample(samples: np.ndarray, sr: int, target_sr: int) -> np.ndarray:
     return np.asarray(out, dtype=np.float32)
 
 
+def ffmpeg_exe() -> str | None:
+    """ffmpeg on PATH or installed by winget (its Links folder is not always on PATH of a started app)."""
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    link = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Links" / "ffmpeg.exe"
+    return str(link) if link.exists() else None
+
+
+def duration_seconds(path: str | Path) -> float:
+    """Length of a file in seconds: libsndfile, else the tags (mutagen reads mp4/aac too); 0.0 if unknown."""
+    try:
+        info = sf.info(str(path))
+        return info.frames / info.samplerate if info.samplerate else 0.0
+    except Exception:  # noqa: BLE001 - not a libsndfile format
+        pass
+    try:
+        import mutagen
+        f = mutagen.File(str(path))
+        return float(f.info.length) if f is not None and f.info else 0.0
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def decode_ffmpeg(path: str | Path, sr: int, start: float = 0.0, seconds: float | None = None) -> np.ndarray:
+    """float32 mono samples at ``sr`` decoded by ffmpeg (``start`` / ``seconds`` in seconds)."""
+    exe = ffmpeg_exe()
+    if not exe:
+        raise RuntimeError(f"{Path(path).suffix} не читается без ffmpeg (winget install ffmpeg)")
+    cmd = [exe, "-v", "error", "-nostdin"]
+    if start > 0:
+        cmd += ["-ss", f"{start:.3f}"]
+    cmd += ["-i", str(path)]
+    if seconds:
+        cmd += ["-t", f"{seconds:.3f}"]
+    cmd += ["-vn", "-ac", "1", "-ar", str(int(sr)), "-f", "f32le", "-"]
+    r = subprocess.run(cmd, capture_output=True, timeout=300, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if r.returncode != 0 or not r.stdout:
+        raise RuntimeError(f"ffmpeg: {r.stderr.decode('utf-8', 'replace').strip()[:200] or 'no audio'}")
+    return np.frombuffer(r.stdout, dtype="<f4").astype(np.float32)
+
+
+def _load_mono_ffmpeg(path, target_sr, max_seconds, offset_mode) -> tuple[np.ndarray, int]:
+    sr = int(target_sr or 44100)
+    total = duration_seconds(path)
+    start, frames = _window(int(total * sr), sr, max_seconds, offset_mode)
+    mono = decode_ffmpeg(path, sr, start / sr, frames / sr if frames > 0 else None)
+    np.clip(mono, -1.0, 1.0, out=mono)
+    return mono, sr
+
+
 def load_mono(
     path: str | Path,
     target_sr: int | None = None,
@@ -62,9 +117,16 @@ def load_mono(
 
     Only the requested window (``max_seconds`` from the start or the middle) is
     read from disk; mix-down and resampling happen on that window only.
-    Decoding errors propagate (callers treat them as failed predictions).
+    Decoding errors propagate (callers treat them as failed predictions).  Formats libsndfile does not know
+    (AAC / .m4a) go through ffmpeg.
     """
-    with sf.SoundFile(str(path)) as f:
+    try:
+        f = sf.SoundFile(str(path))
+    except sf.LibsndfileError:
+        if not ffmpeg_exe():
+            raise
+        return _load_mono_ffmpeg(path, target_sr, max_seconds, offset_mode)
+    with f:
         sr = int(f.samplerate)
         start, frames = _window(int(f.frames), sr, max_seconds, offset_mode)
         if start > 0:
@@ -88,7 +150,18 @@ def waveform_peaks(path: str | Path, columns: int = 600, ctx: JobContext | None 
     columns = max(1, int(columns))
     mins = np.full(columns, np.inf, dtype=np.float32)
     maxs = np.full(columns, -np.inf, dtype=np.float32)
-    with sf.SoundFile(str(path)) as f:
+    try:
+        f = sf.SoundFile(str(path))
+    except sf.LibsndfileError:
+        if not ffmpeg_exe():
+            raise
+        x = decode_ffmpeg(path, 8000)                     # AAC: the whole file, coarse rate is enough for peaks
+        if x.size == 0:
+            return np.zeros((columns, 2), dtype=np.float32)
+        np.clip(x, -1.0, 1.0, out=x)
+        cols = np.array_split(x, columns)
+        return np.array([[c.min(), c.max()] if c.size else [0.0, 0.0] for c in cols], dtype=np.float32)
+    with f:
         total = int(f.frames)
         if total <= 0:
             return np.zeros((columns, 2), dtype=np.float32)

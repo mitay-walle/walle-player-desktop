@@ -777,6 +777,42 @@ def build_server(window) -> Any:
             res = await run(lambda: gui(sh.status))
         return res
 
+    @server.tool(description="Import likes into a listener (user_id from remote_share; \"owner\" = the app's «Избранное»): "
+                             "a file `path` (text «Artist - Title» lines, CSV with artist/title columns, JSON, M3U) or the "
+                             "same as `text`. dry_run=true (default) only reports what matches the library.")
+    async def import_likes(user_id: str = "owner", path: str = "", text: str = "", dry_run: bool = True) -> dict:
+        from musicplayer.core import likeimport
+
+        def go():
+            user = window.sharing.cfg.user(user_id) if user_id else None
+            if user is None:
+                return {"error": f"нет слушателя {user_id!r}",
+                        "listeners": [{"id": u["id"], "name": u["name"]} for u in window.sharing.cfg.users]}
+            items = likeimport.parse(likeimport.read_file(path) if path else text, path)
+            res = likeimport.match(ctx.db, items)
+            out = {"user": user["name"], "items": len(items), "matched": len(res["matched"]),
+                   "unmatched": [likeimport.describe(i) for i in res["unmatched"]][:200]}
+            if not dry_run:
+                out["added"] = likeimport.apply(ctx.db, user, [t["id"] for _, t in res["matched"]],
+                                                [i.get("added") for i, _ in res["matched"]])
+                ctx.events.favorites_changed.emit()
+            return out
+        announce("import_likes")
+        return await run(lambda: gui(go))
+
+    @server.tool(description="«Не показывать» for a listener (user_id \"owner\" = this app): action = list | hide | show; kind = "
+                             "track (key = id) | album (key = \"artist\u001falbum\") | artist | genre | mood (key = name). Hidden "
+                             "things leave the wave, the lists and the search of that listener.")
+    async def hidden_items(action: str = "list", kind: str = "", key: str = "", user_id: str = "owner") -> dict:
+        from musicplayer.core import hidden
+
+        def go():
+            if action in ("hide", "show"):
+                hidden.set_hidden(ctx.db, user_id, kind, key, action == "hide")
+                ctx.events.hidden_changed.emit()
+            return {"items": hidden.listing(ctx.db, user_id)}
+        return await run(lambda: gui(go))
+
     @server.tool(description="State of the current/last background job.")
     async def job_status() -> dict:
         return await run(lambda: gui(job_summary))

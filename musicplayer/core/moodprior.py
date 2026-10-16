@@ -22,7 +22,10 @@ K_RULE = 3.0                           # how many "typical" tracks a genre -> mo
 
 # known pairs (the user's rule): these genres sound heavy
 GENRE_HINTS = {g: ["Тяжёлое"] for g in ("metal", "metalcore", "deathcore", "djent", "nu metal", "post-hardcore",
-                                         "hardcore", "punk", "heavy metal", "power metal", "thrash metal")}
+                                         "hardcore", "punk", "heavy metal", "power metal", "thrash metal", "industrial metal",
+                                         # the catalogue's names since the genre vocabulary (core/genres.py)
+                                         "метал", "металкор", "джент", "ню-метал", "пост-хардкор", "хардкор", "панк",
+                                         "пауэр-метал")}
 
 
 class Neighbours:
@@ -42,8 +45,8 @@ class Neighbours:
         self.genres_of: dict[int, list[str]] = defaultdict(list)
         for r in db.conn.execute("SELECT id, COALESCE(NULLIF(albumartist,''), artist) FROM tracks WHERE missing=0"):
             self.artist_of[r[0]] = (r[1] or "").casefold()
-        for tid, g in db.conn.execute("SELECT track_id, lower(genre) FROM track_genres"):
-            self.genres_of[tid].append(g)
+        for tid, g in db.conn.execute("SELECT track_id, genre FROM track_genres"):
+            self.genres_of[tid].append(g.casefold())        # SQLite's lower() leaves Cyrillic as it is
         self.a_sum: dict[str, np.ndarray] = defaultdict(lambda: np.zeros(len(moods)))
         self.a_n: dict[str, int] = defaultdict(int)
         self.g_sum: dict[str, np.ndarray] = defaultdict(lambda: np.zeros(len(moods)))

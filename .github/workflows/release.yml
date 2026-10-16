@@ -1,0 +1,135 @@
+# Windows build of Walle Player, signed through SignPath (free code signing for open source, docs/code-signing.md).
+#
+# A tag v<version> (or "Run workflow" by hand) builds the app on GitHub's machine from this repository's sources,
+# has SignPath sign WallePlayer.exe, packs the installer around the signed program and has SignPath sign the installer.
+# Until the SignPath secrets are set, the same build runs and keeps an unsigned installer among the run's artifacts
+# only; the GitHub release is then made by hand from the local build (self-signed, with WallePlayer.cer).
+#
+# Settings → Secrets and variables → Actions:
+#   secret   SIGNPATH_API_TOKEN          the CI user's API token from SignPath
+#   variable SIGNPATH_ORGANIZATION_ID    the organization id from SignPath
+#   variable SIGNPATH_PROJECT_SLUG       optional, default walle-player-desktop
+#   variable SIGNPATH_POLICY_SLUG        optional, default release-signing (test-signing for trial runs)
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Python packages
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python -m pip install --upgrade pip
+          .venv\Scripts\python -m pip install -r requirements-build.txt
+
+      - name: Version
+        id: ver
+        run: |
+          $v = .venv\Scripts\python -c "import musicplayer; print(musicplayer.__version__)"
+          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -ne "v$v") {
+            throw "tag $env:GITHUB_REF_NAME does not match the program version $v (musicplayer/__init__.py)"
+          }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: libmpv (shinchiro/mpv-winbuild-cmake, latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $asset = gh release view --repo shinchiro/mpv-winbuild-cmake --json assets --jq '.assets[].name' |
+                   Where-Object { $_ -match '^mpv-dev-x86_64-\d' } | Select-Object -First 1
+          if (-not $asset) { throw "no mpv-dev-x86_64 archive in the latest mpv-winbuild-cmake release" }
+          gh release download --repo shinchiro/mpv-winbuild-cmake --pattern $asset --dir mpv-dl
+          7z e "mpv-dl\$asset" "-othird_party\mpv" libmpv-2.dll -r -y
+          if (-not (Test-Path third_party\mpv\libmpv-2.dll)) { throw "libmpv-2.dll not found in $asset" }
+
+      - name: Build the app
+        run: .venv\Scripts\pyinstaller musicplayer.spec --noconfirm
+
+      - name: WallePlayer.exe for signing
+        id: app-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-unsigned
+          path: dist/WallePlayer/WallePlayer.exe
+          if-no-files-found: error
+
+      - name: Sign WallePlayer.exe (SignPath)
+        if: env.SIGNPATH_API_TOKEN != ''
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'walle-player-desktop' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: app
+          github-artifact-id: ${{ steps.app-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-app
+
+      - name: The signed WallePlayer.exe back into the app
+        if: env.SIGNPATH_API_TOKEN != ''
+        run: Copy-Item signed-app\WallePlayer.exe dist\WallePlayer\WallePlayer.exe -Force
+
+      - name: Build the installer
+        run: .venv\Scripts\python scripts\build_installer.py --sign none
+
+      - name: Installer for signing
+        id: installer-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-unsigned
+          path: dist/installer/WallePlayer-Setup-${{ steps.ver.outputs.version }}.exe
+          if-no-files-found: error
+
+      - name: Sign the installer (SignPath)
+        if: env.SIGNPATH_API_TOKEN != ''
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'walle-player-desktop' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.installer-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-installer
+
+      - name: Release files
+        run: |
+          New-Item -ItemType Directory release -Force | Out-Null
+          $src = if (Test-Path signed-installer) { "signed-installer" } else { "dist\installer" }
+          Copy-Item "$src\WallePlayer-Setup-${{ steps.ver.outputs.version }}.exe" release\
+          Get-AuthenticodeSignature release\*.exe | Format-List Status, SignerCertificate
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WallePlayer-Setup-${{ steps.ver.outputs.version }}
+          path: release/
+
+      - name: GitHub release (tags only, signed builds only)
+        if: github.ref_type == 'tag' && env.SIGNPATH_API_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:GITHUB_REF_NAME *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:GITHUB_REF_NAME --title "Walle Player ${{ steps.ver.outputs.version }}" --notes "См. CHANGELOG.md."
+          }
+          gh release upload $env:GITHUB_REF_NAME (Get-ChildItem release\*.exe).FullName --clobber

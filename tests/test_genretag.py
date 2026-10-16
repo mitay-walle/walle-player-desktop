@@ -2,9 +2,9 @@ from musicplayer.core.genretag import map_tags
 
 
 def test_map_tags_to_tree():
-    assert map_tags([["post-hardcore", 5], ["metalcore", 4], ["rock", 1]]) == ["Metal", "Post-hardcore", "Metalcore"]
-    assert map_tags([["hip hop", 3]], lang="ru") == ["Hip-hop", "Русский рэп"]
-    assert map_tags([["pop punk", 2], ["punk rock", 2]])[:2] == ["Punk", "Pop punk"]
+    assert map_tags([["post-hardcore", 5], ["metalcore", 4], ["rock", 1]]) == ["Metal", "Post-Hardcore", "Metalcore"]
+    assert map_tags([["hip hop", 3]], lang="ru") == ["Hip-Hop", "Russian Rap"]
+    assert map_tags([["pop punk", 2], ["punk rock", 2]])[:2] == ["Punk", "Pop Punk"]
     assert map_tags([["emotional", 3], ["indie rock", 3]]) == ["Rock"]
     assert map_tags([]) == []
 

@@ -14,6 +14,7 @@ from musicplayer.core import moods as moods_vocab
 from musicplayer.core.similar import similar_tracks
 from musicplayer.ui.context import AppContext
 from musicplayer.ui.pages.playlists import playlist_menu
+from musicplayer.core.genres import from_paths, to_paths
 from musicplayer.ui.theme import TOKENS
 from musicplayer.ui.widgets import CoverCache, FlowLayout, TrackModel, TrackView, fmt_date
 
@@ -38,18 +39,48 @@ def confirm_trash(parent, ctx, tracks: list[dict]) -> bool:
     if not tracks:
         return False
     names = "\n".join(f"• {t['artist']} — {t['title']}" for t in tracks[:8]) + (f"\n… и ещё {len(tracks) - 8}" if len(tracks) > 8 else "")
-    if QMessageBox.question(parent, "Удалить файлы?", f"Переместить в корзину Windows ({len(tracks)}):\n{names}\n\nИх можно восстановить из корзины.",
-                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                            QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+    owner = parent
+    while owner is not None and owner.windowType() == Qt.WindowType.Popup:   # a popup keeps the keyboard: ask from its window
+        owner.hide()
+        owner = owner.parentWidget()
+    box = QMessageBox(QMessageBox.Icon.Question, "Удалить файлы?",
+                      f"Переместить в корзину Windows ({len(tracks)}):\n{names}\n\nИх можно восстановить из корзины.",
+                      parent=owner.window() if owner is not None else None)
+    yes = box.addButton("Удалить", QMessageBox.ButtonRole.AcceptRole)
+    no = box.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(yes)                     # Enter deletes, Escape cancels
+    box.setEscapeButton(no)
+    box.exec()
+    if box.clickedButton() is not yes:
         return False
     cur = ctx.player.current
     if cur and any(cur["id"] == t["id"] for t in tracks):
         ctx.player.next()                         # the file must not be held open by the player
     res = trash_tracks(ctx.db, tracks)
-    ctx.events.library_changed.emit()
+    failed = set(res["failed"])
+    gone = [t["id"] for t in tracks if t["path"] not in failed]
+    from musicplayer.core import deletemarks
+    deletemarks.drop_deleted(ctx.db, gone)                # a deleted track is no longer «на удаление»
+    drop_from_queue(ctx.player, gone)
+    ctx.events.tracks_removed.emit(gone)                 # lists keep their place
     if res["failed"]:
         QMessageBox.warning(parent, "Не всё удалено", "Не удалось удалить:\n" + "\n".join(res["failed"][:5]))
     return bool(res["deleted"])
+
+
+def drop_from_queue(player, ids) -> None:
+    """Deleted tracks leave the play queue too (the playing one has already moved on); mpv's preloaded next follows."""
+    gone = set(ids)
+    q = player.queue
+    cur = q.current_index if q.current is not None else None
+    idxs = [i for i, t in enumerate(q.items) if t["id"] in gone and i != cur]
+    if not idxs:
+        return
+    for i in sorted(idxs, reverse=True):
+        q.remove(i)
+    if hasattr(player, "_append_next"):
+        player._append_next()
+    player.queue_changed.emit()
 
 
 TRASH_CSS = ("QPushButton { color:#E88A8A; background:transparent; border:1px solid rgba(232,138,138,70); "
@@ -220,9 +251,9 @@ class GenreChips(QWidget):
     """Quick-pick genres (emocore, djent, pop punk, post-hardcore, power metal ...) of the selected tracks."""
 
     toggled = Signal(str, bool)
+    rebuilt = Signal()                                   # new chips after the user taught the tree a genre
 
-    FAMILY_COLOURS = {"Rock": "#E8A87C", "Punk": "#F28B82", "Metal": "#AEB8C6", "Electronic": "#7FD6E0",
-                      "Hip-hop": "#C5A8F5", "Pop": "#F5A9C4", "Jazz": "#C9A27A", "Soundtrack": "#D9BE95", "Oriental": "#E0C27A"}
+    from musicplayer.core.genres import FAMILY_COLOURS     # one vocabulary with the server and the phones
 
     @staticmethod
     def _css(col: str, family: bool) -> str:
@@ -239,11 +270,16 @@ class GenreChips(QWidget):
         super().__init__(parent)
         from musicplayer.core.genres import GENRE_TREE, PARENT
         self.tree, self.parent_of = GENRE_TREE, PARENT
-        flow = FlowLayout(self, 3)                   # each family is followed by its own sub-genres, in its colour
-        flow.header = False
+        self.flow = FlowLayout(self, 3)              # each family is followed by its own sub-genres, in its colour
+        self.flow.header = False
         self.buttons: dict[str, QPushButton] = {}
+        self._build()
+
+    def _build(self) -> None:
+        from musicplayer.core.genres import DEFAULT_COLOUR, GENRE_TREE
+        flow = self.flow
         for fam, subs in GENRE_TREE.items():
-            col = self.FAMILY_COLOURS.get(fam, "#B8C4CF")
+            col = self.FAMILY_COLOURS.get(fam, DEFAULT_COLOUR)
             for g in [fam, *subs]:
                 b = QPushButton(g if g == fam else f"› {g}")
                 b.setCheckable(True)
@@ -268,10 +304,54 @@ class GenreChips(QWidget):
         self._sync_visibility()
 
     def _sync_visibility(self) -> None:
+        gone = getattr(self, "hidden_names", set())
+        for g, b in self.buttons.items():
+            if g in self.tree:                                   # a family: shown unless hidden
+                b.setVisible(g.casefold() not in gone)
         for s, fam in self.parent_of.items():
-            self.buttons[s].setVisible(self.buttons[fam].isChecked() or self.buttons[s].isChecked())
+            if s in self.buttons and fam in self.buttons:
+                self.buttons[s].setVisible((self.buttons[fam].isChecked() or self.buttons[s].isChecked())
+                                           and s.casefold() not in gone and fam.casefold() not in gone)
+
+    def set_hidden(self, names) -> None:
+        """Genres the listener chose «Не показывать» (My wave leaves their chips out; labelling shows them all)."""
+        self.hidden_names = {n.casefold() for n in names}
+        self._sync_visibility()
+
+    def refresh_tree(self) -> bool:
+        """The tree grew (a genre typed as «Punk/Skate Punk»): rebuild the chips.  True when something changed."""
+        from musicplayer.core.genres import GENRE_CHIPS
+        if list(self.buttons) == GENRE_CHIPS:
+            return False
+        keep = self.selected()
+        while self.flow.count():
+            it = self.flow.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        self.buttons = {}
+        self._build()
+        for g in keep & set(self.buttons):
+            self.buttons[g].setChecked(True)
+        self._sync_visibility()
+        self.rebuilt.emit()
+        return True
+
+    def selected(self) -> set[str]:
+        return {g for g, b in self.buttons.items() if b.isChecked()}
+
+    def set_selected(self, names) -> None:
+        """A choice that is not a track's labels (My wave): checked as given, every chip enabled."""
+        self.refresh_tree()
+        want = {n.lower() for n in names}
+        for g, b in self.buttons.items():
+            b.blockSignals(True)
+            b.setChecked(g.lower() in want)
+            b.setEnabled(True)
+            b.blockSignals(False)
+        self._sync_visibility()
 
     def show_state(self, tracks: list[dict]) -> None:
+        self.refresh_tree()
         for g, b in self.buttons.items():
             have = sum(g.lower() in [x.lower() for x in t.get("genres", [])] for t in tracks)
             b.blockSignals(True)
@@ -421,10 +501,16 @@ class LibraryPage(QWidget):
         for w in (self.limit_plays, self.max_plays, self.plays_period, self.stale, self.stale_days):
             bar2.addWidget(w)
         bar2.addStretch(1)
+        self.show_hidden = QCheckBox("показать скрытое")
+        self.show_hidden.setToolTip("Треки, альбомы, исполнители, жанры и метки с «Не показывать» (список — «Избранное» → «Скрытое»)")
+        self.show_hidden.hide()
+        bar2.addWidget(self.show_hidden)
         bar2.addWidget(self.count_label)
 
         self.model = TrackModel(covers)
         self.view = TrackView(self.model)
+        self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.view.customContextMenuRequested.connect(self._context_menu)
         left = QWidget()
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
@@ -436,7 +522,8 @@ class LibraryPage(QWidget):
         self.cover = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         self.cover.setFixedHeight(220)
         self.info = QLabel(wordWrap=True)
-        self.genre_edit = QLineEdit(placeholderText="Жанры через запятую")
+        from musicplayer.ui.genreinput import GenreLineEdit
+        self.genre_edit = GenreLineEdit()                 # «Punk/Pop Punk, Metal» with suggestions
         self.genre_apply = QPushButton("Сохранить жанры в БД")
         self.chips = MoodChips()
         self.flag_chips = FlagChips()
@@ -541,6 +628,9 @@ class LibraryPage(QWidget):
         self.btn_all.clicked.connect(self.reset_filters)
         self.btn_pl.clicked.connect(lambda: playlist_menu(self, self.ctx, [t["id"] for t in self._selection]))
         ctx.events.library_changed.connect(self.reload_lists)
+        ctx.events.tracks_removed.connect(self._rows_removed)
+        ctx.events.hidden_changed.connect(self._hidden_changed)
+        self.show_hidden.toggled.connect(lambda _on: self.refresh())
         ctx.events.tracks_changed.connect(self._tracks_changed)
         ctx.events.show_track.connect(self.show_track)
         ctx.events.show_rows.connect(self.set_rows)
@@ -605,11 +695,14 @@ class LibraryPage(QWidget):
             combo.blockSignals(False)
         self.chips.set_moods([m["name"] for m in db.list_moods()])
         self.chips.set_counts(db.mood_example_counts())
+        self.genre_edit.set_known([g["name"] for g in db.list_values("genre")])
         self.refresh()
 
     def filters(self) -> dict:
         _, order, desc = SORTS[self.sort.currentIndex()]
         kw: dict = {"text": self.search.text(), "order": order, "desc": desc, "limit": LIMIT}
+        if not self.show_hidden.isChecked():
+            kw["hide_user"] = self.ctx.listener           # «Не показывать» of the chosen listener (core/hidden.py)
         if self.genre.currentIndex() > 0:
             kw["genre"] = self.genre.currentText()
         mi = self.mood.currentIndex()
@@ -650,6 +743,62 @@ class LibraryPage(QWidget):
         self.view.select_ids(keep)
         total = self.ctx.db.conn.execute("SELECT COUNT(*) FROM tracks WHERE missing=0").fetchone()[0]
         self.count_label.setText(f"{self.mode_title or 'Найдено'}: {len(rows)} из {total}")
+        self._on_selection(self.view.selected_ids())
+        self._hidden_box()
+
+    def _hidden_box(self) -> int:
+        from musicplayer.core import hidden
+        n = sum(hidden.counts(self.ctx.db, self.ctx.listener).values())
+        self.show_hidden.setVisible(bool(n) or self.show_hidden.isChecked())
+        self.show_hidden.setText(f"показать скрытое ({n})" if n else "показать скрытое")
+        return n
+
+    def _context_menu(self, pos) -> None:
+        from PySide6.QtWidgets import QMenu
+        from musicplayer.ui.hideactions import add_track_items
+        tracks = list(self._selection)
+        if not tracks:
+            return
+        m = QMenu(self)
+        m.addAction("Играть", self.play_selected)
+        m.addAction("Играть следующим", lambda: self.ctx.player.enqueue(tracks, next_=True))
+        m.addAction("В очередь", lambda: self.ctx.player.enqueue(tracks))
+        m.addAction("В плейлист…", lambda: playlist_menu(self, self.ctx, [t["id"] for t in tracks]))
+        m.addSeparator()
+        add_track_items(m, self.ctx, self, tracks)
+        m.addSeparator()
+        m.addAction("Удалить файл… (Delete)", self.trash_selected)
+        m.exec(self.view.viewport().mapToGlobal(pos))
+
+    def _hidden_changed(self) -> None:
+        """Hidden things leave the shown list in place (an opened album / search stays); «Вернуть» brings them back."""
+        from musicplayer.core import hidden
+        self._hidden_box()
+        if self.mode_title:                               # an album / playlist ... shown from elsewhere: filter it
+            if not self.show_hidden.isChecked():
+                gone = hidden.matcher(self.ctx.db, self.ctx.listener)
+                self._rows_removed([t["id"] for t in self.model.rows if gone(t)])
+        else:
+            self.refresh()
+
+    def _rows_removed(self, ids: list[int]) -> None:
+        """Deleted tracks leave the table where they were: the shown list (an album, a search ...), its scroll and
+        sort stay; the next track is selected, so Delete can go on down the list."""
+        bar = self.view.verticalScrollBar()
+        pos = bar.value()
+        first = self.model.remove_ids(ids)
+        bar.setValue(pos)
+        if first is not None and self.model.rows:
+            r = min(first, len(self.model.rows) - 1)
+            self.view.select_ids([self.model.rows[r]["id"]])
+            bar.setValue(pos)
+            self.view.setCurrentIndex(self.model.index(r, 0))
+        n = len(self.model.rows)
+        if self.mode_title:
+            self.count_label.setText(f"{self.mode_title}: {n}")
+        else:
+            total = self.ctx.db.conn.execute("SELECT COUNT(*) FROM tracks WHERE missing=0").fetchone()[0]
+            self.count_label.setText(f"Найдено: {n} из {total}")
         self._on_selection(self.view.selected_ids())
 
     def set_rows(self, rows: list[dict], title: str) -> None:
@@ -706,7 +855,7 @@ class LibraryPage(QWidget):
         self.era_chips.show_state(sel)
         self.btn_trash.setEnabled(bool(sel))
         self.btn_edit.setEnabled(bool(sel))
-        fav = bool(sel) and all(self.ctx.db.is_favorite("track", str(t["id"])) for t in sel)
+        fav = bool(sel) and all(self.ctx.is_liked("track", str(t["id"])) for t in sel)
         self.btn_fav.setText("♥ В избранном (убрать)" if fav else "♡ В избранное")
         self.btn_fav.setEnabled(bool(sel))
         from musicplayer.core import labelclip
@@ -730,11 +879,11 @@ class LibraryPage(QWidget):
             self.info.setText(f"<b>{t['title']}</b><br>{t['artist']}<br>{t['album'] or '—'} · {t['year'] or '—'}<br>"
                               f"Прослушано: {t['play_count']} (30 дн: {t['plays_by_period']['month']}, "
                               f"год: {t['plays_by_period']['year']}), последний раз {fmt_date(t['last_played'])}")
-            self.genre_edit.setText(", ".join(t["genres"]))
+            self.genre_edit.setText(to_paths(t["genres"]))
         else:
             self.info.setText(f"<b>Выбрано треков: {len(sel)}</b>")
             common = set(sel[0]["genres"]).intersection(*[set(s["genres"]) for s in sel[1:]])
-            self.genre_edit.setText(", ".join(g for g in sel[0]["genres"] if g in common))
+            self.genre_edit.setText(to_paths([g for g in sel[0]["genres"] if g in common]))
         sugg = {}
         for s in sel:
             for m in s["mood_suggestions"]:
@@ -785,9 +934,9 @@ class LibraryPage(QWidget):
         sel = self._selection
         if not sel:
             return
-        on = not all(self.ctx.db.is_favorite("track", str(t["id"])) for t in sel)
+        on = not all(self.ctx.is_liked("track", str(t["id"])) for t in sel)
         for t in sel:
-            self.ctx.db.set_favorite("track", str(t["id"]), on)
+            self.ctx.set_liked("track", str(t["id"]), on)
         self.ctx.events.favorites_changed.emit()
 
     def edit_selected(self) -> None:
@@ -825,7 +974,18 @@ class LibraryPage(QWidget):
 
     def _apply_genres(self) -> None:
         ids = [t["id"] for t in self._selection]
-        genres = [g.strip() for g in self.genre_edit.text().split(",") if g.strip()]
+        from musicplayer.core.genres import learn
+        try:
+            new = learn(self.ctx.db, self.genre_edit.text())  # «Punk/Skate Punk»: a new sub-genre with its own button
+        except ValueError as e:                              # genres are English only
+            from PySide6.QtWidgets import QToolTip
+            self.genre_edit.setStyleSheet("border: 1px solid #E5484D;")
+            QToolTip.showText(self.genre_edit.mapToGlobal(self.genre_edit.rect().bottomLeft()), str(e), self.genre_edit)
+            return
+        self.genre_edit.setStyleSheet("")
+        genres = from_paths(self.genre_edit.text())         # «Punk/Pop Punk» -> family and sub-genre
+        if new:
+            self.genre_edit.set_known([g["name"] for g in self.ctx.db.list_values("genre")])
         self.ctx.db.set_genres(ids, genres)
         self.ctx.events.tracks_changed.emit(ids)
 

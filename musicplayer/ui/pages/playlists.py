@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
                                QVBoxLayout, QWidget)
 
 from musicplayer.ui.context import AppContext
-from musicplayer.ui.widgets import CoverCache, TrackModel, TrackView
+from musicplayer.ui.widgets import CoverCache, TrackModel, TrackView, refresh_when_shown
 
 ORDERS = [("Исполнитель", "artist"), ("Случайно", "random"), ("Случайно, чаще редкие", "rare_random"),
           ("Меньше прослушиваний", "play_count"), ("Давно не слушал", "last_played"), ("Год", "year")]
@@ -162,6 +162,7 @@ class PlaylistsPage(QWidget):
         self.lst.currentRowChanged.connect(lambda *_: self.show_current())
         self.view.play_requested.connect(lambda row: ctx.player.play_tracks(self.model.rows, row))
         ctx.events.library_changed.connect(self.refresh)
+        refresh_when_shown(self, ctx.events.tracks_removed, self.refresh)
         ctx.events.tracks_changed.connect(lambda ids: self.show_current())
         self.refresh()
 

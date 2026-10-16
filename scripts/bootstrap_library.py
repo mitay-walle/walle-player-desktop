@@ -56,7 +56,7 @@ def main() -> None:
     print(f"catalogue: {home / 'library.db'}  tracks: {db.conn.execute('SELECT COUNT(*) FROM tracks').fetchone()[0]}")
     if step == "scan":
         root = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_ROOT
-        r = scanner.scan(db, root, covers, lambda i, p: ctx.progress(i, 0, p))
+        r = scanner.scan(db, root, covers, lambda d, t, m: ctx.progress(d, t, m))
         print({k: v for k, v in r.items() if k != "errors"}, "errors:", len(r["errors"]))
     elif step == "descriptors":
         workers = int(os.environ.get("WORKERS", "6"))

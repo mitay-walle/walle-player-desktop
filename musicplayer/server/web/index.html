@@ -35,11 +35,15 @@
   <symbol id="i-user" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.2-4 4.3-6 8-6s6.8 2 8 6" stroke-linecap="round"/></g></symbol>
   <symbol id="i-album" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".6" fill="currentColor"/></g></symbol>
   <symbol id="i-list" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 6h11M4 11h11M4 16h7"/><path d="M17 20v-8l4-1"/><circle cx="15.5" cy="20" r="1.6"/></g></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12.5V5a1.5 1.5 0 0 1 1.5-1.5h7.5l8 8-9 9z"/></g><circle cx="8" cy="8" r="1.4" fill="currentColor"/></symbol>
+  <symbol id="i-hide" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12s3-6 8.5-6c1.6 0 3 .5 4.2 1.2M20.5 12s-3 6-8.5 6c-1.6 0-3-.5-4.2-1.2"/><path d="M10 12a2 2 0 0 0 3.1 1.7M14 11.2A2 2 0 0 0 12.8 10"/><path d="M4.5 19.5l15-15"/></g></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 12.5h9l1-12.5M10.5 11v5.5M13.5 11v5.5"/></g></symbol>
   <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
   <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20.3s-7.6-4.6-9.3-9.3C1.5 7.6 3.7 4.5 7 4.5c2.1 0 3.6 1.2 5 3 1.4-1.8 2.9-3 5-3 3.3 0 5.5 3.1 4.3 6.5-1.7 4.7-9.3 9.3-9.3 9.3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
   <symbol id="i-heart-on" viewBox="0 0 24 24"><path d="M12 20.3s-7.6-4.6-9.3-9.3C1.5 7.6 3.7 4.5 7 4.5c2.1 0 3.6 1.2 5 3 1.4-1.8 2.9-3 5-3 3.3 0 5.5 3.1 4.3 6.5-1.7 4.7-9.3 9.3-9.3 9.3z" fill="currentColor" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
   <symbol id="i-download" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7 10.5 5 5 5-5"/><path d="M5 19.5h14"/></g></symbol>
-  <symbol id="i-volume" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></g></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M14 4h6v6M10 20H4v-6M20 4l-6.5 6.5M4 20l6.5-6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-volume"viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></g></symbol>
 </svg>
 
 <div id="app" class="app">
@@ -61,23 +65,38 @@
 
   <div class="mini" id="mini" hidden>
     <div class="mini-progress"><i id="mini-bar"></i></div>
-    <button class="mini-open" id="mini-open" aria-label="Открыть плеер">
-      <span class="cover sm" id="mini-cover"></span>
-      <span class="mini-text"><b id="mini-title"></b><small id="mini-artist"></small></span>
-    </button>
-    <div class="mini-rate" id="mini-rate" hidden>
-      <button class="icon-btn" data-rate="dislike" aria-label="Не подходит"><svg><use href="#i-thumbdown"/></svg></button>
-      <button class="icon-btn" data-rate="like" aria-label="Подходит"><svg><use href="#i-up"/></svg></button>
+    <div class="mini-left">
+      <button class="mini-open" id="mini-open" aria-label="Открыть плеер">
+        <span class="cover sm" id="mini-cover"></span>
+        <span class="mini-text"><b id="mini-title"></b><small id="mini-artist"></small></span>
+      </button>
+      <div class="mini-rate" id="mini-rate" hidden>
+        <button class="icon-btn" data-rate="dislike" aria-label="Не подходит"><svg><use href="#i-thumbdown"/></svg></button>
+        <button class="icon-btn" data-rate="like" aria-label="Подходит"><svg><use href="#i-up"/></svg></button>
+      </div>
+      <button class="icon-btn like-btn" id="mini-like" data-like aria-label="Нравится"><svg><use href="#i-heart"/></svg></button>
     </div>
-    <button class="icon-btn like-btn" id="mini-like" data-like aria-label="Нравится"><svg><use href="#i-heart"/></svg></button>
-    <div class="mini-ctrl">
-      <button class="icon-btn wide-only" data-act="prev" aria-label="Предыдущий"><svg><use href="#i-prev"/></svg></button>
-      <button class="play-btn sm" data-act="toggle" aria-label="Играть / пауза"><svg><use href="#i-play"/></svg></button>
-      <button class="icon-btn" data-act="next" aria-label="Следующий"><svg><use href="#i-next"/></svg></button>
+    <div class="mini-center">
+      <div class="mini-ctrl">
+        <button class="icon-btn wide-only" data-act="shuffle" aria-label="Перемешать"><svg><use href="#i-shuffle"/></svg></button>
+        <button class="icon-btn wide-only" data-act="prev" aria-label="Предыдущий"><svg><use href="#i-prev"/></svg></button>
+        <button class="play-btn sm" data-act="toggle" aria-label="Играть / пауза"><svg><use href="#i-play"/></svg></button>
+        <button class="icon-btn" data-act="next" aria-label="Следующий"><svg><use href="#i-next"/></svg></button>
+        <button class="icon-btn wide-only" data-act="repeat" aria-label="Повтор"><svg><use href="#i-repeat"/></svg><i class="badge1">1</i></button>
+      </div>
+      <div class="mini-seek wide-only">
+        <span class="t-cur">0:00</span>
+        <input type="range" class="seekbar" min="0" max="1000" step="1" value="0" aria-label="Перемотка">
+        <span class="t-dur">0:00</span>
+      </div>
     </div>
-    <div class="mini-vol wide-only">
-      <svg class="vol-ico"><use href="#i-volume"/></svg>
-      <input type="range" id="volume" min="0" max="1" step="0.01" value="1" aria-label="Громкость">
+    <div class="mini-right wide-only">
+      <button class="icon-btn" data-act="queue" aria-label="Очередь" title="Очередь"><svg><use href="#i-queue"/></svg></button>
+      <div class="mini-vol">
+        <svg class="vol-ico"><use href="#i-volume"/></svg>
+        <input type="range" id="volume" min="0" max="1" step="0.01" value="1" aria-label="Громкость">
+      </div>
+      <button class="icon-btn" data-act="expand" aria-label="Развернуть плеер" title="Развернуть плеер"><svg><use href="#i-expand"/></svg></button>
     </div>
   </div>
 
@@ -85,6 +104,7 @@
 </div>
 
 <div class="full" id="full" aria-hidden="true">
+  <div class="full-bg" id="full-bg"></div>
   <div class="full-inner">
     <header class="full-head" id="full-head">
       <button class="icon-btn" id="full-close" aria-label="Свернуть"><svg><use href="#i-down"/></svg></button>
@@ -93,11 +113,13 @@
     </header>
     <img class="full-mark" src="/static/mark.png" alt="">
     <div class="full-cover" id="full-cover"></div>
+    <div class="full-side">
     <div class="full-meta">
       <div class="full-titles">
         <h2 id="full-title"></h2>
         <button class="link" id="full-artist"></button>
       </div>
+      <button class="icon-btn lg" id="full-hide" data-hide aria-label="Не показывать" title="Не показывать: трек, альбом или исполнителя"><svg><use href="#i-hide"/></svg></button>
       <button class="icon-btn like-btn lg" id="full-like" data-like aria-label="Нравится"><svg><use href="#i-heart"/></svg></button>
     </div>
     <div class="guess" id="guess" hidden>
@@ -111,8 +133,8 @@
     <div class="chips small" id="full-moods"></div>
     <button class="link genres-link" id="full-genres"></button>
     <div class="seek">
-      <input type="range" id="seek" min="0" max="1000" step="1" value="0" aria-label="Перемотка">
-      <div class="times"><span id="t-cur">0:00</span><span id="t-dur">0:00</span></div>
+      <input type="range" class="seekbar" id="seek" min="0" max="1000" step="1" value="0" aria-label="Перемотка">
+      <div class="times"><span class="t-cur">0:00</span><span class="t-dur">0:00</span></div>
     </div>
     <div class="controls">
       <button class="icon-btn" data-act="shuffle" id="btn-shuffle" aria-label="Перемешать"><svg><use href="#i-shuffle"/></svg></button>
@@ -125,6 +147,7 @@
       <button class="pill wave-pill" id="full-wave">AI-радио по настроению</button>
       <button class="icon-btn" data-act="queue" aria-label="Очередь"><svg><use href="#i-queue"/></svg></button>
     </div>
+    </div>
   </div>
 </div>
 
@@ -132,6 +155,7 @@
   <div class="sheet-back" data-close></div>
   <div class="sheet-body">
     <div class="sheet-grip" data-close></div>
+    <button class="icon-btn sheet-x" data-close aria-label="Закрыть"><svg><use href="#i-close"/></svg></button>
     <h3 id="sheet-title"></h3>
     <div id="sheet-content"></div>
   </div>

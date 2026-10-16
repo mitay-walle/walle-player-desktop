@@ -22,13 +22,16 @@ RECENT_SEC = 2 * 3600
 class Wave:
     def __init__(self, db: Database, moods: list[str] | None = None, character: str = "mixed",
                  min_conf: float = 0.55, explore: float = 0.3, rng: random.Random | None = None,
-                 genres: list[str] | None = None, plays: dict[int, tuple[int, float | None]] | None = None) -> None:
+                 genres: list[str] | None = None, plays: dict[int, tuple[int, float | None]] | None = None,
+                 user: str | None = "owner") -> None:
         """``plays``: {track id: (count, last played)} of another listener (a guest on a phone): favourite/unfamiliar
         and «not again so soon» then follow HIS listening, not the catalogue's."""
         self.db = db
         self.plays = plays
+        self.user = user                                 # whose «Не показывать» the wave respects (None: nobody's)
         self.moods = [m for m in (moods or [])]
-        self.genres = [g for g in (genres or []) if g]
+        from .genres import canonical                   # «рок» / «rock» from an older client means «Rock»
+        self.genres = [c for g in (genres or []) if g for c in (canonical(g) or [g])]
         self.character = character if character in CHARACTERS else "mixed"
         self.min_conf = min_conf
         self.explore = explore
@@ -66,6 +69,11 @@ class Wave:
             fits = lambda t: any(g.casefold() in want for g in t.get("genres", []))  # noqa: E731
             known = {i: t for i, t in known.items() if fits(t)}
             guess = {i: t for i, t in guess.items() if fits(t)}
+        if self.user:                                   # «Не показывать»: never in this listener's wave
+            from .hidden import matcher
+            hidden = matcher(self.db, self.user)
+            known = {i: t for i, t in known.items() if not hidden(t)}
+            guess = {i: t for i, t in guess.items() if not hidden(t)}
         return known, guess
 
     def _weights(self, rows: list[dict]) -> list[float]:

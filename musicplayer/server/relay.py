@@ -184,10 +184,11 @@ class Relay:
             except OSError:
                 pass
             # no output = the forward is up: ssh -N stays silent unless something fails
-            up = threading.Timer(4.0, lambda p=self._proc: self._set("connected") if p.poll() is None else None)
+            proc = self._proc                        # stop() may clear self._proc from another thread meanwhile
+            up = threading.Timer(4.0, lambda p=proc: self._set("connected") if p.poll() is None else None)
             up.start()
-            err = (self._proc.stderr.read() or "").strip() if self._proc.stderr else ""
-            self._proc.wait()
+            err = (proc.stderr.read() or "").strip() if proc.stderr else ""
+            proc.wait()
             up.cancel()
             if self._stop.is_set():
                 break

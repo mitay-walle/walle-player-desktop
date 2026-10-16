@@ -40,12 +40,61 @@ async function api(path, body) {
   return r.json();
 }
 
-function toast(text, ms = 2600) {
+function toast(text, ms = 2600, action = null) {
   const t = $("#toast");
   t.textContent = text;
+  if (action) {                                   // [label, fn]: e.g. «Отменить» right after «Не показывать»
+    const b = document.createElement("button");
+    b.className = "toast-btn"; b.textContent = action[0];
+    b.onclick = () => { t.classList.remove("show"); action[1](); };
+    t.append(" ", b);
+  }
+  t.classList.toggle("has-action", !!action);
   t.classList.add("show");
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => t.classList.remove("show"), ms);
+  toast._t = setTimeout(() => t.classList.remove("show", "has-action"), action ? Math.max(ms, 7000) : ms);
+}
+
+// ---- «Не показывать»: per listener on the server (/api/hidden); lists, search and the wave leave it out ---------------
+const HIDDEN = { items: store.get("wp_hidden", []) || [] };
+async function loadHidden() {
+  try { HIDDEN.items = (await api("/api/hidden")).items; store.set("wp_hidden", HIDDEN.items); } catch { /* offline: keep */ }
+}
+// ---- «Пометить на удаление»: a request to the owner, who deletes (or not) on the computer --------------------------------
+const MARKS = { items: store.get("wp_delmarks", []) || [] };
+async function loadMarks() {
+  try { MARKS.items = (await api("/api/delete-marks")).items; store.set("wp_delmarks", MARKS.items); } catch { /* offline: keep */ }
+}
+const isMarked = (kind, key) => MARKS.items.some(m => m.kind === kind && m.key === key);
+async function toggleMark(kind, key, label) {
+  const on = !isMarked(kind, key);
+  try { await api("/api/delete-marks", { kind, key, on }); } catch (e) { if (e.message !== "401") toast("Ошибка: " + e.message); return; }
+  await loadMarks();
+  toast(on ? `${label}: помечено на удаление — решение примут на компьютере` : `${label}: пометка снята`, on ? 5000 : 2600,
+        on ? ["Отменить", () => toggleMark(kind, key, label)] : null);
+}
+function markItems(t) {
+  const items = [[isMarked("track", String(t.id)) ? "close" : "trash", isMarked("track", String(t.id)) ? "Снять пометку удаления" : "Пометить трек на удаление",
+                  () => toggleMark("track", String(t.id), `«${t.title}»`)]];
+  if (t.album) items.push([isMarked("album", albumKey(t)) ? "close" : "trash",
+                           isMarked("album", albumKey(t)) ? "Снять пометку удаления с альбома" : "Пометить альбом на удаление",
+                           () => toggleMark("album", albumKey(t), `альбом «${t.album}»`)]);
+  return items;
+}
+const hiddenSet = kind => new Set(HIDDEN.items.filter(i => i.kind === kind).map(i => i.key.toLowerCase()));
+const albumKey = t => `${t.albumartist || t.artist || ""}\x1f${t.album || ""}`;
+async function setHidden(kind, key, on) {
+  await api("/api/hidden", { kind, key, on });
+  await loadHidden();
+  render();
+}
+async function hideThing(kind, key, label) {
+  try { await setHidden(kind, key, true); } catch (e) { if (e.message !== "401") toast("Ошибка: " + e.message); return; }
+  toast(`Не показывается: ${label}`, 7000, ["Отменить", () => setHidden(kind, key, false).catch(() => {})]);
+}
+function askHide(kind, name) {
+  const what = kind === "genre" ? "жанр" : "метку";
+  if (confirm(`Не показывать ${what} «${name}»? Вернуть можно в профиле → «Скрытое».`)) hideThing(kind, name, `${what} «${name}»`);
 }
 
 // ---- player ------------------------------------------------------------------------------------------------------
@@ -262,7 +311,8 @@ function renderBuffered() {
   const dur = audio.duration || 0, b = audio.buffered;
   let end = 0;
   for (let k = 0; k < b.length; k++) if (b.start(k) <= audio.currentTime + 1) end = Math.max(end, b.end(k));
-  $("#seek").style.setProperty("--b", (dur ? Math.min(100, end / dur * 100) : 0) + "%");
+  const pb = (dur ? Math.min(100, end / dur * 100) : 0) + "%";
+  for (const s of seekbars) s.style.setProperty("--b", pb);
 }
 setInterval(() => { if (!audio.paused) P.save(); }, 5000);
 window.addEventListener("pagehide", () => P.save());
@@ -310,7 +360,7 @@ async function rate(verdict) {
 // recording type and voice, language, vocals, genre (families with their sub-genres + own), era
 function openLabels(t) {
   const L = INFO.labels || { genre_tree: [], eras: [], flags: [], langs: [], vocals: [] };
-  const st = { moods: new Set(t.moods || []), flags: new Set(t.flags || []), genres: [...(t.genres || [])],
+  const st = { paths: [], moods: new Set(t.moods || []), flags: new Set(t.flags || []), genres: [...(t.genres || [])],
                lang: t.lang || null, vocal: t.vocal || null, era: t.year ? null : (t.era || null) };
   const guessed = t.wave?.moods || [];
   const groups = {};
@@ -332,7 +382,8 @@ function openLabels(t) {
     <div class="group-name">Язык</div><div class="chips">${one("lang", L.langs, st.lang)}</div>
     <div class="group-name">Голос</div><div class="chips">${one("vocal", L.vocals, st.vocal)}</div>
     <div class="group-name">Жанр</div><div class="chips" id="lab-genres">${genresHtml()}</div>
-    <form class="genre-add" id="g-form"><input id="g-new" placeholder="Свой жанр" autocomplete="off"><button class="pill" type="submit">Добавить</button></form>
+    <form class="genre-add" id="g-form"><input id="g-new" list="g-paths" placeholder="Жанр: Punk/Pop Punk, Metal" autocomplete="off"><button class="pill" type="submit">Добавить</button></form>
+    <datalist id="g-paths">${genrePaths().map(p => `<option value="${esc(p)}">`).join("")}</datalist>
     <div class="group-name">Эпоха${t.year ? ` <span style="text-transform:none;letter-spacing:0">(год в файле: ${t.year} — он главнее)</span>` : ""}</div>
     <div class="chips">${one("era", L.eras.map(d => ({ key: d, name: `${d}-е` })), t.year ? Math.floor(t.year / 10) * 10 : st.era)}</div>
     <div class="actions">${isGuess(t) ? `<button class="pill ghost" id="fix-none">Подходящего настроения нет</button>` : ""}<button class="pill accent" id="fix-save">Сохранить</button></div>`;
@@ -364,22 +415,27 @@ function openLabels(t) {
       const g = e.target.closest("[data-g]");
       if (g) {
         const name = g.dataset.g;
-        if (has(name)) st.genres = st.genres.filter(x => x.toLowerCase() !== name.toLowerCase());
+        if (has(name)) {                                         // a family switched off takes its sub-genres along
+          const off = new Set([name, ...(L.genre_tree.find(f => f.name === name)?.subs || [])].map(x => x.toLowerCase()));
+          st.genres = st.genres.filter(x => !off.has(x.toLowerCase()));
+        }
         else { st.genres.push(name); if (g.dataset.fam && !has(g.dataset.fam)) st.genres.push(g.dataset.fam); }  // a sub-genre sets its family
         $("#lab-genres", body).innerHTML = genresHtml();
       }
     };
     $("#g-form", body).onsubmit = e => {
       e.preventDefault();
-      const g = $("#g-new", body).value.trim();
-      if (g && !has(g)) st.genres.push(g);
+      const typed = $("#g-new", body).value;
+      if (/[\u0400-\u04FF]/.test(typed)) { toast("Жанры пишутся по-английски (латиницей)"); $("#g-new", body).focus(); return; }
+      for (const g of fromPaths(typed)) if (!has(g)) st.genres.push(g);   // «Punk/Pop Punk, Metal»
+      st.paths.push(...typed.split(/[,;\n]+/).map(x => x.trim()).filter(x => x.includes("/")));   // the server learns new sub-genres
       $("#g-new", body).value = ""; $("#lab-genres", body).innerHTML = genresHtml();
     };
     const none = $("#fix-none", body);
     if (none) none.onclick = () => { closeSheet(); rate("dislike"); };
     $("#fix-save", body).onclick = async () => {
       const moods = [...st.moods];
-      const payload = { moods, reject: guessed.filter(m => !st.moods.has(m)), genres: st.genres, flags: [...st.flags],
+      const payload = { moods, reject: guessed.filter(m => !st.moods.has(m)), genres: [...st.genres, ...st.paths], flags: [...st.flags],
                         lang: st.lang, vocal: st.vocal };
       if (!t.year) payload.era = st.era;
       try {
@@ -388,6 +444,7 @@ function openLabels(t) {
           genres: res.genres, flags: res.flags, lang: res.lang, vocal: res.vocal, era: res.era });
         if (t.wave) { t.wave.kind = "known"; t.wave.moods = moods; }
         closeSheet(); toast("Сохранено — модель учтёт"); renderPlayer(); P.save();
+        if (st.paths.length) api("/api/info").then(i => { INFO = i; store.set("wp_info", INFO); }).catch(() => {});   // new genre chips
       } catch (e) { if (e.message !== "401") toast("Ошибка: " + e.message); }
     };
   });
@@ -441,6 +498,7 @@ function renderPlayer() {
   $("#mini-rate").hidden = !isGuess(t);
   $("#mini-like").hidden = (isGuess(t) && innerWidth < 900) || NET.down;
   document.querySelectorAll("[data-like]").forEach(b => { if (b.id !== "mini-like") b.hidden = NET.down; });
+  document.querySelectorAll("[data-hide]").forEach(b => { b.hidden = NET.down; });
   for (const b of document.querySelectorAll("[data-like]")) {
     b.classList.toggle("on", !!t.liked);
     b.querySelector("use").setAttribute("href", t.liked ? "#i-heart-on" : "#i-heart");
@@ -448,6 +506,7 @@ function renderPlayer() {
   }
   const fc = $("#full-cover");
   fc.className = `full-cover ${t.cover ? "" : "empty"}`; fc.style.backgroundImage = t.cover ? `url('${t.cover}')` : "";
+  $("#full-bg").style.backgroundImage = t.cover ? `url('${t.cover}')` : "";
   $("#full-title").textContent = t.title;
   $("#full-artist").textContent = t.artist + (t.album ? " · " + t.album : "");
   $("#full-label").textContent = P.wave ? "Моя волна" : "Сейчас играет";
@@ -464,13 +523,13 @@ function renderPlayer() {
     const p = c != null ? Math.round(c * 100) : null;
     return `<span class="chip ${p != null ? "prob" : ""}" ${p != null ? `style="--p:${p}%" title="Определено моделью"` : ""}><span class="g" style="color:${MOOD[m]?.color || "#aaa"}">${esc(MOOD[m]?.glyph || "•")}</span>${esc(m)}${p != null ? ` <span class="pct">${p}%</span>` : ""}</span>`;
   }).join("")
-    + (canLabel() && !NET.down ? `<button class="chip" id="mood-edit" style="color:var(--accent)">✎ Разметить</button>` : "");
+    + (canLabel() && !NET.down ? `<button class="chip" id="mood-edit" style="color:var(--accent)">${icon("tag")}Разметить</button>` : "");
   const me = $("#mood-edit"); if (me) me.onclick = () => openLabels(t);
   const gl = $("#full-genres");
   gl.innerHTML = (t.genres || []).length ? `Жанр: <b>${esc(t.genres.join(", "))}</b>${canLabel() ? " · изменить" : ""}` : (canLabel() ? "Указать жанр…" : "");
   gl.disabled = !canLabel();
-  $("#btn-shuffle").classList.toggle("on", P.shuffle);
-  const rp = $("#btn-repeat"); rp.classList.toggle("on", P.repeat !== "off"); rp.classList.toggle("one", P.repeat === "one");
+  document.querySelectorAll('[data-act="shuffle"]').forEach(b => b.classList.toggle("on", P.shuffle));
+  document.querySelectorAll('[data-act="repeat"]').forEach(b => { b.classList.toggle("on", P.repeat !== "off"); b.classList.toggle("one", P.repeat === "one"); });
   $("#full-wave").textContent = P.wave ? (P.wave.moods.length || P.wave.genres?.length ? "Волна: " + waveTitle(P.wave) : "Моя волна играет") : "AI-радио по настроению";
   renderPlayState(); renderTime();
 }
@@ -484,9 +543,10 @@ function renderTime() {
   const dur = audio.duration || P.cur?.duration || 0, pos = audio.currentTime || 0;
   const pct = dur ? (pos / dur) * 100 : 0;
   $("#mini-bar").style.width = pct + "%";
-  if (!seeking) { const s = $("#seek"); s.value = Math.round(pct * 10); s.style.setProperty("--p", pct + "%"); }
+  if (!seeking) for (const s of seekbars) { s.value = Math.round(pct * 10); s.style.setProperty("--p", pct + "%"); }
   renderBuffered();
-  $("#t-cur").textContent = fmt(pos); $("#t-dur").textContent = fmt(dur);
+  if (!seeking) setTimes(fmt(pos));
+  document.querySelectorAll(".t-dur").forEach(e => { e.textContent = fmt(dur); });
   if ("mediaSession" in navigator && dur && navigator.mediaSession.setPositionState) {
     try { navigator.mediaSession.setPositionState({ duration: dur, position: Math.min(pos, dur), playbackRate: 1 }); } catch {}
   }
@@ -497,10 +557,18 @@ function renderNowInViews() {
   if (route.name === "wave") renderWaveNow();
 }
 
+// the same seek bar twice: in the full player and (on a PC) in the bottom bar
 let seeking = false;
-const seek = $("#seek");
-seek.addEventListener("input", () => { seeking = true; const dur = audio.duration || 0; seek.style.setProperty("--p", seek.value / 10 + "%"); $("#t-cur").textContent = fmt(dur * seek.value / 1000); });
-seek.addEventListener("change", () => { const dur = audio.duration || 0; if (dur) audio.currentTime = dur * seek.value / 1000; seeking = false; });
+const seekbars = [...document.querySelectorAll(".seekbar")];
+const setTimes = text => document.querySelectorAll(".t-cur").forEach(e => { e.textContent = text; });
+for (const seek of seekbars) {
+  seek.addEventListener("input", () => {
+    seeking = true; const dur = audio.duration || 0;
+    for (const s of seekbars) { s.value = seek.value; s.style.setProperty("--p", seek.value / 10 + "%"); }
+    setTimes(fmt(dur * seek.value / 1000));
+  });
+  seek.addEventListener("change", () => { const dur = audio.duration || 0; if (dur) audio.currentTime = dur * seek.value / 1000; seeking = false; });
+}
 
 $(".mini-progress").addEventListener("click", e => {
   const r = e.currentTarget.getBoundingClientRect(), dur = audio.duration || 0;
@@ -517,7 +585,7 @@ document.addEventListener("click", e => {
     const act = a.dataset.act;
     if (act === "toggle") P.toggle(); else if (act === "next") P.next(); else if (act === "prev") P.prev();
     else if (act === "shuffle") P.setShuffle(!P.shuffle); else if (act === "repeat") P.cycleRepeat();
-    else if (act === "queue") openQueue();
+    else if (act === "queue") openQueue(); else if (act === "expand") openFull();
     return;
   }
   const r = e.target.closest("[data-rate]");
@@ -536,6 +604,7 @@ function closeFull(fromPop) {
 $("#mini-open").onclick = openFull;
 $("#full-close").onclick = () => closeFull();
 $("#full-more").onclick = () => P.cur && trackMenu(P.cur, true);
+$("#full-hide").onclick = () => P.cur && !NET.down && hideMenu(P.cur);
 $("#full-artist").onclick = () => { if (P.cur) { closeFull(); go(`artist/${encodeURIComponent(P.cur.albumartist || P.cur.artist)}`); } };
 $("#full-genres").onclick = () => P.cur && openLabels(P.cur);
 $("#full-wave").onclick = () => { closeFull(); go("wave"); };
@@ -565,6 +634,31 @@ function closeSheet() {
 }
 sheet.addEventListener("click", e => { if (e.target.closest("[data-close]")) closeSheet(); });
 
+// genres as hierarchical text: «Семейство/Поджанр» items, comma-separated (the catalogue keeps family and sub-genre)
+const fromPaths = text => [...new Set(String(text || "").split(/[,;\n]+/).flatMap(i => i.split("/")).map(x => x.trim()).filter(Boolean))];
+function genrePaths() {                      // the suggestions: the tree as paths, then the library's own genres
+  const tree = (INFO.labels?.genre_tree || []).flatMap(f => [f.name, ...f.subs.map(s => `${f.name}/${s}`)]);
+  const known = new Set((INFO.labels?.genre_tree || []).flatMap(f => [f.name, ...f.subs]).map(x => x.toLowerCase()));
+  return [...tree, ...(INFO.genres || []).map(g => g.name).filter(n => !known.has(n.toLowerCase()))];
+}
+
+function hideItems(t) {                     // the same «Не показывать» choices everywhere (menu ⋯, the button by the like)
+  const artist = t.albumartist || t.artist;
+  return [["hide", "Не показывать трек", () => hideThing("track", String(t.id), `«${t.title}»`)],
+    t.album && ["hide", "Не показывать альбом", () => hideThing("album", albumKey(t), `альбом «${t.album}»`)],
+    ["hide", "Не показывать исполнителя", () => hideThing("artist", artist, `исполнитель «${artist}»`)]].filter(Boolean);
+}
+function hideMenu(t) {
+  const items = hideItems(t);
+  openSheet("Не показывать", `<p style="color:var(--muted);margin:-6px 0 8px">${esc(t.title)} · ${esc(t.artist)}</p>` +
+    items.map((it, k) => `<button class="menu-item" data-k="${k}">${icon(it[0])}${esc(it[1])}</button>`).join(""), body => {
+    body.querySelectorAll("[data-k]").forEach(b => b.onclick = () => {
+      const f = items[+b.dataset.k][2]; closeSheet();
+      setTimeout(async () => { await f(); if (P.cur && P.cur.id === t.id) P.next(true); }, 50);   // hidden: on to the next
+    });
+  });
+}
+
 function trackMenu(t, fromPlayer = false) {
   const items = [
     !fromPlayer && ["play", "Играть следующим", () => P.playNext(t)],
@@ -574,8 +668,10 @@ function trackMenu(t, fromPlayer = false) {
                                      : !NET.down && ["download", "Скачать на устройство", () => OFF.download([t])]),
     ["user", "К исполнителю", () => { closeFull(); go(`artist/${encodeURIComponent(t.albumartist || t.artist)}`); }],
     t.album && ["album", "К альбому", () => { closeFull(); go(`album/${encodeURIComponent(t.albumartist || t.artist)}/${encodeURIComponent(t.album)}`); }],
-    canLabel() && !NET.down && ["wave", "Разметить трек…", () => openLabels(t)],
+    canLabel() && !NET.down && ["tag", "Разметить трек…", () => openLabels(t)],
     fromPlayer && ["queue", "Очередь", () => openQueue()],
+    ...(NET.down ? [] : hideItems(t)),
+    ...(NET.down ? [] : markItems(t)),
   ].filter(Boolean);
   const meta = [t.album, t.year, (t.genres || []).join(", "), t.plays ? `слушал ${t.plays} раз` : "ещё не слушал"].filter(Boolean).join(" · ");
   openSheet(t.title, `<p style="color:var(--muted);margin:-6px 0 8px">${esc(t.artist)}${meta ? "<br>" + esc(meta) : ""}</p>` +
@@ -714,7 +810,8 @@ const VIEWS = {
     const ws = { moods: [], character: "mixed", genres: [], ...store.get("wp_wave", {}) };
     let allGenres = false;
     const groups = {};
-    for (const m of info.moods) (groups[m.group] ||= []).push(m);
+    const hm = hiddenSet("mood"), hg = hiddenSet("genre");
+    for (const m of info.moods) if (!hm.has(m.name.toLowerCase())) (groups[m.group] ||= []).push(m);
     view.innerHTML = `
       <div class="wave-hero">
         <button class="play-btn xl" id="wave-play" aria-label="Запустить волну">${icon("play")}</button>
@@ -731,7 +828,7 @@ const VIEWS = {
       <div class="chips" id="wave-genres"></div>
       <div class="actions" style="margin-top:18px"><button class="pill ghost" id="wave-reset">Сбросить выбор</button></div>`;
     const paintGenres = () => {
-      const top = info.genres || [];
+      const top = (info.genres || []).filter(g => !hg.has(g.name.toLowerCase()));
       const list = allGenres ? top : top.slice(0, 18);
       const extra = ws.genres.filter(g => !list.some(x => x.name === g)).map(name => ({ name, n: 0 }));
       $("#wave-genres").innerHTML = [...extra, ...list].map(g => `<button class="chip ${ws.genres.includes(g.name) ? "on" : ""}" data-g="${esc(g.name)}">${esc(g.name)}${g.n ? ` <span class="cnt">${g.n}</span>` : ""}</button>`).join("")
@@ -754,6 +851,10 @@ const VIEWS = {
       if (P.wave) startWave(ws);
     });
     view.querySelectorAll("[data-c]").forEach(b => b.onclick = () => { ws.character = b.dataset.c; paint(); if (P.wave) startWave(ws); });
+    if (!NET.down) {                                   // long press on a phone, right click on a PC: «Не показывать»
+      view.querySelectorAll("[data-m]").forEach(b => b.oncontextmenu = e => { e.preventDefault(); askHide("mood", b.dataset.m); });
+      $("#wave-genres").oncontextmenu = e => { const b = e.target.closest("[data-g]"); if (b) { e.preventDefault(); askHide("genre", b.dataset.g); } };
+    }
     $("#wave-reset").onclick = () => { ws.moods = []; ws.genres = []; paint(); paintGenres(); if (P.wave) startWave(ws); };
     $("#wave-play").onclick = () => {
       if (P.wave && P.cur && sameWave(P.wave, ws)) P.toggle(); else startWave(ws);
@@ -874,6 +975,25 @@ const VIEWS = {
     bindRows($("#alb-list"), () => r.items);
   },
 
+  async hidden() {
+    setTop("Скрытое", true);
+    view.innerHTML = `<div class="loader">Загрузка…</div>`;
+    await loadHidden();
+    const kinds = [["track", "Треки"], ["album", "Альбомы"], ["artist", "Исполнители"], ["genre", "Жанры"], ["mood", "Метки"]];
+    const items = HIDDEN.items;
+    view.innerHTML = items.length ? `<p class="empty-note" style="padding:0 0 12px;text-align:left">Скрытое не играет в «Моей волне» и не показывается в списках и поиске. Случайно скрыли — «Вернуть».</p>` +
+      kinds.filter(([k]) => items.some(i => i.kind === k)).map(([k, name]) => `<div class="group-name">${name}</div><div class="list">` +
+        items.filter(i => i.kind === k).map(i => `<div class="row"><span class="row-main"><span class="row-text"><b>${esc(i.title)}</b><small>${esc(i.sub || "")}</small></span></span>
+          <button class="pill ghost" data-back="${esc(i.kind)}" data-key="${esc(i.key)}">Вернуть</button></div>`).join("") + `</div>`).join("")
+      : `<div class="empty-note">Ничего не скрыто. «Не показывать» — в меню трека (⋯); жанр или метку в «Моей волне» — долгим нажатием.</div>`;
+    view.querySelectorAll("[data-back]").forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      try { await api("/api/hidden", { kind: b.dataset.back, key: b.dataset.key, on: false }); toast("Снова показывается"); }
+      catch (e) { if (e.message !== "401") toast("Ошибка: " + e.message); }
+      VIEWS.hidden();
+    });
+  },
+
   async offline() {
     setTop("Скачанное", true);
     view.innerHTML = `<div class="loader">Загрузка…</div>`;
@@ -990,7 +1110,9 @@ function openProfile() {
       ${u.can_label ? "Вы можете размечать настроения и жанры." : ""}</p>
     <p style="color:var(--dim);font-size:13px">${esc(INFO.name || "")} · ${INFO.tracks} треков · Walle Player ${esc(INFO.version)}</p>
     ${OFF.available ? `<button class="menu-item" id="prof-off">${icon("download")}<span id="prof-off-text">Скачанное на устройстве</span></button>` : ""}
+    <button class="menu-item" id="prof-hidden">${icon("close")}<span>Скрытое${HIDDEN.items.length ? ` · ${HIDDEN.items.length}` : ""}</span></button>
     <div class="actions"><button class="pill ghost" id="logout">Выйти на этом устройстве</button></div>`, body => {
+    $("#prof-hidden", body).onclick = () => { closeSheet(); go("hidden"); };
     $("#rename", body).onsubmit = async e => {
       e.preventDefault();
       const name = $("#rename-name", body).value.trim();
@@ -1064,7 +1186,9 @@ $("#join-form").addEventListener("submit", async e => {
   try {
     const r = await fetch("/api/join", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
     const j = await r.json();
-    if (!r.ok) return void ($("#login-err").textContent = r.status === 403 ? "Хозяин выключил запросы доступа — попросите у него QR-код"
+    if (!r.ok) return void ($("#login-err").textContent = r.status === 403 && j.code === "home_only"
+                                                       ? "Попросить доступ можно только из домашней сети: подключитесь к Wi-Fi дома или попросите у хозяина QR-код"
+                                                       : r.status === 403 ? "Хозяин выключил запросы доступа — попросите у него QR-код"
                                                        : r.status === 429 ? "Слишком много запросов, попробуйте позже" : j.error);
     const req = { id: j.id, secret: j.secret };
     store.set("wp_join", req);
@@ -1092,13 +1216,19 @@ document.addEventListener("keydown", e => {
   else if (e.code === "ArrowRight") audio.currentTime = Math.min((audio.duration || 0) - 0.5, audio.currentTime + 10);
   else if (e.code === "ArrowLeft") audio.currentTime = Math.max(0, audio.currentTime - 10);
   else if (e.code === "KeyF") toggleLike(P.cur);
-  else if (e.code === "Escape") { closeSheet(); closeFull(); }
+  else if (e.code === "Escape") { if (sheet.classList.contains("open")) closeSheet(); else closeFull(); }
 });
 
 async function start() {
   await OFF.init();
   let offline = false;
-  try { INFO = await api("/api/info"); store.set("wp_info", INFO); PENDING.flush(); OFF.refreshMeta().catch(() => {}); }
+  try {
+    INFO = await api("/api/info"); store.set("wp_info", INFO); PENDING.flush(); loadHidden(); loadMarks();
+    if (store.get("wp_meta_ver", "") !== INFO.version) {        // a new server may rename labels (genres in 0.4.13)
+      store.set("wp_meta_refresh", 0); store.set("wp_meta_ver", INFO.version);
+    }
+    OFF.refreshMeta().catch(() => {});
+  }
   catch (e) {
     const cached = store.get("wp_info", null);
     if (e.message !== NOCONN || !cached) return;

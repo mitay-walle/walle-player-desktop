@@ -167,7 +167,7 @@ def test_window_can_be_narrow_and_mini_player_is_tiny_and_works(qtbot, app):
     assert not win.player_bar.btn_shuffle.isVisibleTo(win.player_bar) and not win.player_bar.vol.isVisibleTo(win.player_bar)
     assert win.player_bar.btn_play.isVisibleTo(win.player_bar) and win.player_bar.btn_mini.isVisibleTo(win.player_bar)
     mini = win.mini
-    assert mini.width() <= 400 and mini.height() <= 110
+    assert mini.width() <= 440 and mini.height() <= 110
     track = ctx.db.search(limit=1)[0]
     track["duration"] = 100.0
     ctx.player.queue.set([track])
@@ -204,3 +204,44 @@ def test_wave_edit_button_opens_full_labels(qtbot, app, library):
     pop = wave._tags
     assert pop.isVisible() and pop.flags.buttons and pop.genres.buttons and pop.lv.lang_btns and pop.era.buttons
     pop.hide()
+
+
+def test_each_window_mode_keeps_its_own_place(qtbot, app):
+    """The full window and the mini player each remember their own position (the mini one right after a drag)."""
+    from PySide6.QtCore import QPoint
+    ctx, win = app
+    win.show()
+    win.setGeometry(20, 30, 700, 500)
+    qtbot.wait(30)
+    assert not hasattr(win.player_bar, "btn_compact") and not hasattr(win, "toggle_compact")   # no middle-size view
+    full_pos = win.pos()
+    win.enter_mini()
+    win.mini.move(QPoint(40, 300))
+    win.mini.moved.emit(win.mini.pos())                                  # dragged: remembered at once
+    assert ctx.settings.mini_pos == [40, 300]
+    win.leave_mini()
+    assert win.pos() == full_pos
+    win.enter_mini()
+    assert win.mini.pos() == QPoint(40, 300)
+    for b in (win.mini.btn_prev, win.mini.btn_play, win.mini.btn_next, win.mini.btn_expand, win.mini.btn_pin):
+        assert b.toolTip() and not b.icon().isNull()                     # icons, not clipped text glyphs; tooltips
+    win.leave_mini()
+
+
+def test_mini_player_volume_button_opens_a_vertical_slider(qtbot, app):
+    from PySide6.QtCore import Qt
+    ctx, win = app
+    ctx.player.set_volume(0.5)
+    win.enter_mini()
+    mini = win.mini
+    assert "50%" in mini.btn_vol.toolTip()
+    mini.btn_vol.click()
+    pop = mini.vol_popup
+    assert pop.isVisible() and pop.slider.orientation() == Qt.Orientation.Vertical and pop.slider.value() == 50
+    pop.slider.setValue(30)
+    assert abs(ctx.player.volume - 0.3) < 1e-6 and "30%" in mini.btn_vol.toolTip() and pop.label.text() == "30%"
+    pop.step(5)
+    assert abs(ctx.player.volume - 0.35) < 1e-6
+    pop.hide()
+    win.leave_mini()
+    assert win.player_bar.vol.value() == 35                                 # the full window's slider follows

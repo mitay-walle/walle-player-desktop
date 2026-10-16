@@ -1,5 +1,7 @@
 # PyInstaller spec: build with  .venv\Scripts\pyinstaller musicplayer.spec --noconfirm
 # Output: dist\WallePlayer\WallePlayer.exe (one-folder build, windowed)
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 datas = [("musicplayer/resources", "musicplayer/resources"), ("musicplayer/tools", "musicplayer/tools"),
@@ -26,6 +28,12 @@ if os.path.exists("third_party/cloudflared/cloudflared.exe"):   # optional: inte
     binaries += [("third_party/cloudflared/cloudflared.exe", "third_party/cloudflared")]
 hidden += ["mpv", "PySide6.QtMultimedia", "PySide6.QtCharts", "PySide6.QtSvg"]
 
+import sys
+sys.path[:0] = [SPECPATH, os.path.join(SPECPATH, "scripts")]   # the version comes from the sources being built
+import versioninfo
+from musicplayer import __version__
+version_file = versioninfo.write(Path(SPECPATH) / "build" / "version_app.txt", __version__, "Walle Player", "WallePlayer.exe")
+
 a = Analysis(
     ["scripts/launch.py"],
     pathex=["."],
@@ -36,5 +44,5 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="WallePlayer", console=False,
-          icon="musicplayer/resources/icon.ico")
+          icon="musicplayer/resources/icon.ico", version=str(version_file))
 coll = COLLECT(exe, a.binaries, a.datas, name="WallePlayer")

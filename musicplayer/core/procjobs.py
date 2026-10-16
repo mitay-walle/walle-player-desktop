@@ -60,7 +60,7 @@ def scan(ctx: JobContext, emit, db_path: str, root: str, covers: str, full: bool
     db = _db(db_path)
     try:
         ctx.log(f"Сканирование {root}")
-        r = scanner.scan(db, root, covers, lambda i, p: (ctx.check(), ctx.progress(i, 0, p)), full=full)
+        r = scanner.scan(db, root, covers, lambda d, t, m: (ctx.check(), ctx.progress(d, t, m)), full=full)
         ctx.log(f"Готово: новых {r['added']}, обновлено {r['updated']}, пропало {r['missing']}, "
                 f"ошибок {len(r['errors'])}, всего {r['total']}")
         return r
@@ -75,7 +75,8 @@ def backup_model(models_dir) -> None:
     if cur.exists():
         hist = Path(models_dir) / "history"
         hist.mkdir(exist_ok=True)
-        shutil.copy2(cur, hist / time.strftime("mood_model-%Y%m%d-%H%M%S", time.localtime(cur.stat().st_mtime)) + ".pkl")
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(cur.stat().st_mtime))
+        shutil.copy2(cur, hist / f"mood_model-{stamp}.pkl")
 
 
 def train(ctx: JobContext, emit, db_path: str, models: str, epochs: int, features: str = "auto", web="auto") -> dict:
