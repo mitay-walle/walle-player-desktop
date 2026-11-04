@@ -1,127 +1,103 @@
 # Walle Player
 
-Локальный каталогизатор и плеер личной музыкальной базы (Windows, Python + PySide6) со встроенным MCP-сервером,
-через который Claude управляет приложением. Музыкальная папка только читается; теги в файлах меняются лишь
-отдельной явной командой (с резервной копией и откатом).
+A player and organizer for your own music collection: Windows desktop app, Linux home server, web player and
+Android app. Moods are learned from your own labels, «My Wave» plays endlessly by mood, and the whole library is
+reachable from your phone at home or over the internet. The music folder is read-only; file tags change only on an
+explicit command, with a backup. The interface is in Russian.
 
-## Установка
+![Desktop: My Wave](docs/screenshots/desktop-wave.jpg)
 
-Готовый установщик для Windows 10/11 (64 бит) — в [Releases](https://github.com/mitay-walle/walle-player-desktop/releases):
-`WallePlayer-Setup-<версия>.exe`, права администратора не нужны, данные библиотеки установщик и удаление не трогают.
-Установщик подписан самоподписанным сертификатом «Walle Player», поэтому Windows SmartScreen может предупредить
-о неизвестном издателе («Подробнее» → «Выполнить в любом случае»). Если хотите, чтобы Windows узнавала издателя,
-установите `WallePlayer.cer` из того же релиза: двойной клик → «Установить сертификат» → «Локальный компьютер» →
-хранилища «Доверенные корневые центры сертификации» и «Доверенные издатели».
+## Platforms
 
-## Запуск из исходников
+| | |
+|---|---|
+| **Windows 10/11** | The main app: catalogue, player, mood model, labelling, statistics, MCP server for Claude. Installer in [Releases](https://github.com/mitay-walle/walle-player-desktop/releases). |
+| **Linux server** | Optional always-on home box (`walle-server` systemd service): serves the music, keeps the listeners, scans, backs up the database, holds the tunnel to a VPS. |
+| **Android** | Native app with Android Auto and offline downloads: [RuStore](https://www.rustore.ru/catalog/app/com.mitaywalle.player) or the APK in [Releases](https://github.com/mitay-walle/walle-player-desktop/releases). |
+| **Web** | The same library in any browser; «Add to Home Screen» makes it an app (PWA). |
+
+## How it fits together
+
+```mermaid
+flowchart LR
+    PC["Windows app<br/>analysis, mood model,<br/>labels, MCP"]
+    S["Home server (Linux)<br/>music, listeners,<br/>scans, backups"]
+    V["VPS<br/>https tunnel"]
+    P["Phones<br/>Android app / web player"]
+    PC <-- "catalogue sync:<br/>labels, likes, playlists, plays" --> S
+    S -- "Wi-Fi" --> P
+    S --- V -- "internet" --> P
+```
+
+- **Without a server** the Windows app shares the library itself (port 8780): open «Other devices», scan the QR code
+  with the phone.
+- **With a server** the PC keeps a synced copy of the catalogue: labels, likes, playlists and plays flow both ways;
+  tracks missing on the PC stream from the server, or the PC keeps a full mirror (adds new files only, with a speed
+  limit). Audio analysis and model training stay on the PC; the server only serves.
+- **Listeners**: each person gets their own QR/link with separate likes and history; labelling rights are per
+  listener. New devices can ask for access by name. The owner manages the server's listeners from the PC.
+- **Internet**: a small VPS (SSH tunnel + Caddy https), a static IP via UPnP, or your own address —
+  [docs/internet-access.md](docs/internet-access.md). API: [docs/remote-api.md](docs/remote-api.md).
+- **Sharing**: a link to a track, album or artist opens in the Android app for anyone who already listens to the library.
+
+| Other devices (PC) | Android |
+|---|---|
+| ![Other devices](docs/screenshots/other-devices.png) | ![Android app](docs/screenshots/android.jpg) |
+
+## Features
+
+- **Library**: fast search (FTS5, Cyrillic, prefixes), filters by genre, mood, plays per period, «not played for N
+  days»; artists as a table or photo tiles; duets and «feat.» split into members; duplicate artists merged.
+- **My Wave**: pick moods, genres, language or voice and a character (favourite / unfamiliar / shuffle) — endless
+  playback. Some tracks are the model's guesses: 👍/👎 turns them into labels, so the model learns as you listen.
+- **Mood model**: audio descriptors and CLAP embeddings (offline), honest validation across artists, calibrated
+  confidence; zero-shot CLAP as a second opinion; similar tracks by sound.
+- **Labelling feed**: the track plays from the middle, keys 1–0 pick moods, Enter confirms and moves on.
+- **Order**: hide tracks, albums, artists or genres; «delete» marks from listeners; nightly sound-quality check
+  (broken, truncated, transcoded files); like import from Spotify, Yandex Music, M3U, CSV.
+- **Also**: smart playlists, statistics, mini-player, colour music from the live spectrum, UI zoom.
+
+![Library](docs/screenshots/desktop-library.jpg)
+![Albums](docs/screenshots/desktop-albums.jpg)
+
+## Install
+
+Windows: `WallePlayer-Setup-<version>.exe` from [Releases](https://github.com/mitay-walle/walle-player-desktop/releases),
+no admin rights; uninstalling keeps the library data. SmartScreen may warn about an unknown publisher: «More info» →
+«Run anyway».
+
+Linux server: `python scripts/build_linux_server.py` → `dist/linux/walle-server-<version>.tar.gz`; on the server
+`sudo ./install.sh`, then connect from the PC («Server» in the sidebar).
+
+## From source
 
 ```
-python -m venv / uv venv .venv --python 3.11
+uv venv .venv --python 3.11
 uv pip install --python .venv\Scripts\python.exe -e .[dev] numpy scipy soundfile librosa scikit-learn pyinstaller
-run.bat                      # или dist\WallePlayer\WallePlayer.exe после сборки
+run.bat
 ```
 
-Воспроизведение идёт через libmpv: положите `libmpv-2.dll` (64 бит, например из сборок
-[mpv-winbuild](https://github.com/shinchiro/mpv-winbuild-cmake/releases), архив `mpv-dev-x86_64-*`) в
-`third_party\mpv\` — оттуда её берут и запуск из исходников, и сборка exe.
+Playback uses libmpv: put `libmpv-2.dll` (64-bit, e.g. `mpv-dev-x86_64-*` from
+[mpv-winbuild](https://github.com/shinchiro/mpv-winbuild-cmake/releases)) into `third_party\mpv\`.
+Data lives in `%LOCALAPPDATA%\WallePlayer` (override with `MUSICPLAYER_HOME`). Headless: `python -m musicplayer.server`.
 
-Данные (БД, обложки, модель, `app.log`) — `%LOCALAPPDATA%\WallePlayer`, переопределяется `MUSICPLAYER_HOME`.
-Первый запуск: кнопка «Сканировать» и папка с музыкой (по умолчанию «Музыка» пользователя); пересканирование
-инкрементальное по mtime/размеру.
-
-## Что умеет
-
-- **Библиотека**: быстрый поиск (FTS5, кириллица, префиксы) по названию, исполнителю, альбому, жанру, настроению, году;
-  фильтры по жанру/настроению/прослушиваниям (за всё время, неделю, месяц, год)/«не слушал N дней»; сортировки,
-  в том числе «случайно, чаще редкие».
-- **feat**: «(feat. X)», «ft.», «при участии», «A feat. B» в теге исполнителя разбираются; поиск по участнику.
-- **Плеер**: очередь, пауза/следующий/предыдущий, перемотка, громкость, shuffle (обычный и с уклоном в малопрослушанное),
-  repeat, подгрузка следующего трека (почти gapless). Прослушивание засчитывается при >50% трека или 4 минутах.
-- **Настроения**: список настроений, мульти-выбор кнопками в боковой панели, предложения от модели/Claude
-  с ✓/✗. **Модель настроений**: дескрипторы Freesound (локальный анализ) → MLP на ваших подтверждённых метках,
-  страница «Настроения и модель» показывает анализ, обучение (loss/F1 по эпохам) и предсказания вживую.
-- **Готовая модель CLAP (второе мнение)**: эмбеддинги считает отдельный python (по умолчанию окружение CLAP_GUI,
-  `MUSICPLAYER_CLAP_PYTHON`), модель `laion/clap-htsat-fused` из локального кэша HuggingFace, офлайн. Zero-shot по
-  текстовым описаниям настроений без обучения (с калибровкой), сверка с вашими метками и режим признаков
-  «дескрипторы / CLAP / оба» для обучения. Эмбеддинги включают «Похожие треки» по звуку.
-- **Моя волна** (главная страница, по образцу Яндекс Музыки): выбрали настроение (можно несколько) и характер
-  (любимое / незнакомое / вперемешку), нажали ▶ — трек за треком без конца. Часть треков — «догадки» модели:
-  👍 подтверждает настроение (новая метка), 👎 отклоняет (отрицательный пример). Слушаешь — и модель учится.
-- **Честная точность модели**: проверка по группам исполнителей (чтобы модель не «узнавала артиста»), автоматический
-  выбор лучшей из логрегрессий / MLP / ансамбля дескрипторов и CLAP, калибровка уверенности («80%» значит ~80%),
-  в отчёте две оценки: для новых исполнителей и для тех, у кого уже есть метки.
-- **Лента разметки**: трек играет (с середины), клавиши 1–0 выбирают настроения, Enter подтверждает и открывает следующий,
-  S пропуск, A/D принять/отклонить предложение, Backspace отмена. Источники: неопределённые для модели, случайные,
-  проверка предложений, список из библиотеки.
-- **Похожие треки** (по аудио-дескрипторам и тегам), **плейлисты и умные плейлисты** (жанр + настроение + плеи
-  за период + «не слушал N дней» + порядок/лимит), **статистика** (чаще всего / давно не слушал, по периодам).
-- **Исполнители**: таблица или плитки с фото (из открытого каталога Deezer, иначе обложка альбома), дуэты и
-  «feat.» разбираются на участников, «Дубликаты…» склеивают одного исполнителя под разными написаниями.
-- **Порядок в библиотеке**: «Не показывать» (трек, альбом, исполнитель, жанр), пометки «на удаление» от слушателей,
-  ночная проверка качества звука (битые, оборванные и пережатые из плохой копии файлы), импорт лайков из Spotify / Яндекс Музыки / M3U / CSV.
-- **Цветомузыка**: реальный спектр играющего трека (4 режима) и полоса над плеером. **Масштаб** интерфейса
-  (Ctrl+=/−/0, Ctrl+колесо), **размер плиток** альбомов (ползунок, Ctrl+колесо над сеткой).
-
-## Другие устройства (телефон, другие компьютеры)
-
-Кнопка **«Другие устройства»** внизу боковой панели: галочка открывает библиотеку по Wi-Fi (порт 8780), телефон
-сканирует QR-код — открывается веб-плеер в том же оформлении (Моя волна, музыка, исполнители, альбомы, плейлисты,
-лайки, «Скачать» на устройство — слушать без связи). «Добавить на главный экран» — и он как приложение; есть и
-приложение для Android (с Android Auto), его APK сервер предлагает сам. У каждого слушателя свой QR: свои лайки и
-история, ваше «Избранное» и статистика не смешиваются; разметку настроений/жанров гостю можно разрешить галочкой.
-Новые устройства могут попросить доступ по имени — вы разрешаете в программе. «Поделиться» (трек, альбом,
-исполнитель) копирует ссылку без ключа: она откроется у тех, кто уже слушает библиотеку.
-
-Из интернета: свой небольшой сервер VPS (SSH-туннель, https через Caddy), статический IP через роутер (UPnP) или свой
-адрес — варианты в [docs/internet-access.md](docs/internet-access.md). Пока библиотека открыта, закрытие окна
-сворачивает Walle Player в трей, «Выход» — в меню значка; можно запускать вместе с Windows сразу в трей
-(`WallePlayer.exe --tray`). Без окна: `python -m musicplayer.server`.
-API (и контракт для мобильного приложения): [docs/remote-api.md](docs/remote-api.md).
-
-## Сервер библиотеки дома (Linux)
-
-Библиотеку может держать маленький домашний компьютер: `python scripts/build_linux_server.py` собирает
-`dist/linux/walle-server-<версия>.tar.gz`, на сервере `sudo ./install.sh` ставит службу `walle-server`
-(`python -m musicplayer.server --service`: раздаёт музыку, держит туннель на VPS, сканирует папку, делает копии базы).
-Программа на компьютере подключается к нему (кнопка «Сервер» в боковой панели) и держит синхронизируемую копию
-каталога: метки, лайки, плейлисты и прослушивания идут в обе стороны, треки, которых нет на компьютере, играют с
-сервера, а при желании компьютер держит полное зеркало музыки (только добавляет новое, со своим ограничением
-скорости и паузой). Весь анализ звука и обучение модели идут на компьютере. В «Других устройствах» тогда две
-вкладки: «Сервер» — слушатели сервера (QR, ссылки, ключи, импорт лайков) и «Этот компьютер».
+```
+python -m pytest -n auto                                  # core + GUI (offscreen), parallel
+.venv\Scripts\pyinstaller musicplayer.spec --noconfirm    # dist\WallePlayer\WallePlayer.exe
+```
 
 ## MCP
 
-Сервер запускается вместе с приложением: `http://127.0.0.1:8766/mcp` (streamable HTTP, `.mcp.json` в проекте).
-Каждое действие видно в окне. Основные инструменты: `status`, `search_tracks`, `similar`, `play`, `transport`,
-`enqueue`, `player_state`, `create_playlist`/`edit_playlist`, `set_genres`, `set_moods`, `batch_tag`,
-`suggest_moods`, `resolve_suggestions`, `write_genres_to_files` (по умолчанию `dry_run`) и `restore_genres`,
-`listening_stats`, `analyze`, `train_model`, `predict_moods`, `set_ui`, `screenshot`.
-Вызов из консоли: `python scripts\mcp_call.py <tool> key=value ...`.
+The app runs an MCP server at `http://127.0.0.1:8766/mcp` (streamable HTTP), so Claude can search, play, label,
+train the model and take screenshots; every action shows in the window. From a console:
+`python scripts\mcp_call.py <tool> key=value ...`.
 
-## Тесты и сборка
+## Privacy
 
-```
-python -m pytest -n auto                           # ядро + GUI (offscreen), параллельно
-.venv\Scripts\pyinstaller musicplayer.spec --noconfirm   # dist\WallePlayer\WallePlayer.exe
-python scripts\test_build.py                       # запускает exe и проходит весь сценарий по MCP
-python scripts\e2e_demo.py                         # живое демо на запущенном приложении (песочница данных!)
-```
+Nothing leaves the computer unless you ask: tag lookups (MusicBrainz, Last.fm), artist photos (Deezer, only the
+artist's name is sent) and sharing the library with your own devices.
 
-## Code signing policy
+## License
 
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
-[SignPath Foundation](https://signpath.org/) (pending: the releases are signed this way once the project is accepted).
-Signed releases are built from this repository by [GitHub Actions](.github/workflows/release.yml), see
-[docs/code-signing.md](docs/code-signing.md).
-
-- Committers and reviewers: [mitay-walle](https://github.com/mitay-walle)
-- Approvers: the repository owner
-
-Privacy policy: this program will not transfer any information to other networked systems unless specifically
-requested by the user or the person installing or operating it (looking up tags on MusicBrainz / Last.fm, artist
-photos on Deezer - only the artist's name is sent, sharing the library with the user's own devices).
-
-## Лицензия
-
-[GPL-3.0](LICENSE). В сборку входят [Qt for Python / PySide6](https://doc.qt.io/qtforpython-6/) (LGPL-3.0) и
+[GPL-3.0](LICENSE). Includes [Qt for Python / PySide6](https://doc.qt.io/qtforpython-6/) (LGPL-3.0) and
 [libmpv](https://mpv.io/) (GPL/LGPL).
