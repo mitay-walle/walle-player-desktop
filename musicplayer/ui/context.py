@@ -32,6 +32,7 @@ class AppEvents(QObject):
     listener_changed = Signal()         # likes and «Не показывать» now act for another listener
     delete_marks_changed = Signal()     # «Пометить на удаление» list changed (core/deletemarks.py)
     navigate = Signal(str)
+    start_radio = Signal(dict)          # {"track": track dict} or {"artist": name}: the wave page plays its radio
     show_track = Signal(int)
     favorites_changed = Signal()        # a track / album / artist was hearted or un-hearted
     show_rows = Signal(list, str)       # tracks, title -> shown in the Library page
@@ -46,6 +47,7 @@ class Settings:
     mcp_port: int = 8766
     ui_zoom: float = 1.0
     tile_size: int = 160
+    artists_tiles: bool = False      # «Исполнители» as photo tiles instead of the table
     color_strip: bool = True
     engine: str = "auto"     # auto | mpv | qt
     last_queue: list | None = None     # track ids of the play queue at exit
@@ -58,6 +60,12 @@ class Settings:
     listener: str = "owner"           # whose likes / hidden things the app shows and sets (a listener's id)
     auto_tag: bool = True            # tag new tracks with the trained model after every scan
     auto_mode: str = "balanced"      # strict | balanced | wide: how readily the model assigns moods by itself (source 'auto')
+    library_server: str = ""         # the library lives on a home server: "auto" (find it) or its base URL(s); "" = here
+    server_root: str = ""            # the music folder on that server (its new tracks map into library_root here)
+    sync_paused: bool = False        # the user paused the sync and downloads (the home network is busy)
+    sync_limit_kbps: int = 1024      # downloads from the server (mirror, analysis): KB/s, 0 = no limit
+    sync_mirror: bool = True         # keep library_root a full copy of the server's music
+    night_check: bool = True         # check the sound quality of new tracks at night (core/quality.py)
 
 
 class AppContext:
@@ -79,6 +87,7 @@ class AppContext:
         self.player: PlayerController = make_player(self.db, self.settings.volume,
                                                     os.environ.get("MUSICPLAYER_ENGINE") or self.settings.engine)
         self.closed = False
+        self.library = None                            # LibraryClient when the library lives on a server (the window)
         self.listener_name = ""                       # shown in tooltips when a guest is chosen (set by the window)
         self.label_clipboard: dict | None = None    # «Скопировать метки» (see core/labelclip.py)
 

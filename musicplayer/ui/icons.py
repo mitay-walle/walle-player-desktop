@@ -34,6 +34,7 @@ SVG = {
     "pin": f'<path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v7" {_S}/>',
     "trash": f'<path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 12.5h9l1-12.5M10.5 11v5.5M13.5 11v5.5" {_S}/>',
     "hide": f'<path d="M3.5 12s3-6 8.5-6c1.6 0 3 .5 4.2 1.2M20.5 12s-3 6-8.5 6c-1.6 0-3-.5-4.2-1.2" {_S}/><path d="M10 12a2 2 0 0 0 3.1 1.7M14 11.2A2 2 0 0 0 12.8 10" {_S}/><path d="M4.5 19.5l15-15" {_S}/>',
+    "share": f'<circle cx="17.5" cy="5.5" r="2.3" {_S}/><circle cx="6.5" cy="12" r="2.3" {_S}/><circle cx="17.5" cy="18.5" r="2.3" {_S}/><path d="M8.5 10.8l7-4.1M8.5 13.2l7 4.1" {_S}/>',
     "mic": f'<rect x="9" y="3.5" width="6" height="10.5" rx="3" {_S}/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" {_S}/>',
     "album": f'<circle cx="12" cy="12" r="8.5" {_S}/><circle cx="12" cy="12" r="2.2" {_S}/>',
     "list": f'<path d="M9 6.5h11M9 12h11M9 17.5h11" {_S}/><circle cx="4.8" cy="6.5" r="1" fill="{{c}}"/><circle cx="4.8" cy="12" r="1" fill="{{c}}"/><circle cx="4.8" cy="17.5" r="1" fill="{{c}}"/>',
@@ -43,6 +44,10 @@ SVG = {
     "bars": f'<rect x="4" y="12" width="3.5" height="8" rx="1" {_S}/><rect x="10.25" y="7" width="3.5" height="13" rx="1" {_S}/><rect x="16.5" y="4" width="3.5" height="16" rx="1" {_S}/>',
     "folder": f'<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" {_S}/>',
     "refresh": f'<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" {_S}/><path d="M19.5 4.5v4h-4" {_S}/>',
+    "plus": f'<path d="M12 5v14M5 12h14" {_S}/>',
+    "check": f'<circle cx="12" cy="12" r="8.5" {_S}/><path d="M8 12.3l2.7 2.7L16 9.5" {_S}/>',
+    "copy": f'<rect x="8.5" y="8.5" width="11" height="11" rx="2" {_S}/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5" {_S}/>',
+    "import": f'<path d="M12 4v10.5M7.5 10l4.5 4.5 4.5-4.5M4.5 15.5V19a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-3.5" {_S}/>',
     "expand": f'<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7" {_S}/>',
     "phone": f'<rect x="7" y="3" width="10" height="18" rx="2.2" {_S}/><path d="M11 17.5h2" {_S}/>',
 }
@@ -70,6 +75,8 @@ def icon(name: str, color: str = "#E6E3DA", size: int = 22) -> QIcon:
     return _cache[key]
 
 
+DISABLED = "#5C5B57"                  # icons of unavailable buttons
+
 ICON_BUTTON_CSS = ("QPushButton { background:transparent; border:none; padding:4px; }"
                    "QPushButton:hover { background:rgba(230,227,218,18); border-radius:8px; }"
                    "QPushButton:disabled { background:transparent; }")
@@ -78,7 +85,9 @@ ICON_BUTTON_CSS = ("QPushButton { background:transparent; border:none; padding:4
 def make_icon_button(btn, name: str, color: str = "#E6E3DA", size: int = 22, tip: str = "") -> None:
     """Turn a QPushButton into a background-less icon button (keeps its signals, size hints and shortcuts)."""
     btn.setText("")
-    btn.setIcon(icon(name, color, size))
+    ic = QIcon(icon(name, color, size))
+    ic.addPixmap(icon(name, DISABLED, size).pixmap(QSize(size, size)), QIcon.Mode.Disabled)   # unavailable: dimmed
+    btn.setIcon(ic)
     btn.setIconSize(QSize(size, size))
     btn.setFlat(True)
     btn.setStyleSheet(ICON_BUTTON_CSS)

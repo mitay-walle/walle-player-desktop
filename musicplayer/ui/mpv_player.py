@@ -130,7 +130,8 @@ class MpvPlayerController(PlayerController):
 
     # ---- the PlayerController interface -------------------------------
     def _path(self, t: dict) -> str:
-        return str(Path(t["path"]))
+        from musicplayer.ui.player import source_of
+        return source_of(t)
 
     def cue(self, tracks: list[dict], start: int = 0, pos: float = 0.0) -> None:
         """Restore a session: the queue and the current track at ``pos``, paused (nothing is loaded until ▶)."""

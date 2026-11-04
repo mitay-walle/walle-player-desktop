@@ -5,6 +5,8 @@ active); model/Claude suggestions show up there with accept/reject buttons."""
 
 from __future__ import annotations
 
+import os
+
 from PySide6.QtCore import QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox,
@@ -44,7 +46,10 @@ def confirm_trash(parent, ctx, tracks: list[dict]) -> bool:
         owner.hide()
         owner = owner.parentWidget()
     box = QMessageBox(QMessageBox.Icon.Question, "Удалить файлы?",
-                      f"Переместить в корзину Windows ({len(tracks)}):\n{names}\n\nИх можно восстановить из корзины.",
+                      (f"Удалить на сервере библиотеки ({len(tracks)}):\n{names}\n\nФайлы уходят в папку .walle-trash "
+                       "рядом с музыкой на сервере, оттуда их можно вернуть."
+                       if ctx.library is not None and ctx.library.enabled else
+                       f"Переместить в корзину Windows ({len(tracks)}):\n{names}\n\nИх можно восстановить из корзины."),
                       parent=owner.window() if owner is not None else None)
     yes = box.addButton("Удалить", QMessageBox.ButtonRole.AcceptRole)
     no = box.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
@@ -56,7 +61,17 @@ def confirm_trash(parent, ctx, tracks: list[dict]) -> bool:
     cur = ctx.player.current
     if cur and any(cur["id"] == t["id"] for t in tracks):
         ctx.player.next()                         # the file must not be held open by the player
-    res = trash_tracks(ctx.db, tracks)
+    remover = None
+    if ctx.library is not None and ctx.library.enabled:   # the library lives on a server: delete it there (and here)
+        from musicplayer.core.trash import to_recycle_bin
+        by_path = {t["path"]: t["id"] for t in tracks}
+
+        def remover(path: str) -> bool:
+            ok = ctx.library.trash(by_path[path])
+            if ok and os.path.exists(path):
+                to_recycle_bin(path)
+            return ok
+    res = trash_tracks(ctx.db, tracks, remover) if remover else trash_tracks(ctx.db, tracks)
     failed = set(res["failed"])
     gone = [t["id"] for t in tracks if t["path"] not in failed]
     from musicplayer.core import deletemarks
@@ -764,11 +779,21 @@ class LibraryPage(QWidget):
         m.addAction("Играть следующим", lambda: self.ctx.player.enqueue(tracks, next_=True))
         m.addAction("В очередь", lambda: self.ctx.player.enqueue(tracks))
         m.addAction("В плейлист…", lambda: playlist_menu(self, self.ctx, [t["id"] for t in tracks]))
+        if len(tracks) == 1:
+            t = tracks[0]
+            m.addAction("Радио по треку", lambda: self.ctx.events.start_radio.emit({"track": t}))
+            m.addAction("Радио исполнителя", lambda: self.ctx.events.start_radio.emit(
+                {"artist": t.get("albumartist") or t["artist"]}))
+            m.addAction("Поделиться (скопировать ссылку)", lambda: self._copy_link(t))
         m.addSeparator()
         add_track_items(m, self.ctx, self, tracks)
         m.addSeparator()
         m.addAction("Удалить файл… (Delete)", self.trash_selected)
         m.exec(self.view.viewport().mapToGlobal(pos))
+
+    def _copy_link(self, t: dict) -> None:
+        from musicplayer.ui.libraryclient import copy_share
+        copy_share(self.ctx, self, f"track/{t['id']}")
 
     def _hidden_changed(self) -> None:
         """Hidden things leave the shown list in place (an opened album / search stays); «Вернуть» brings them back."""

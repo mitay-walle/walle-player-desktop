@@ -29,6 +29,7 @@
   <symbol id="i-down" viewBox="0 0 24 24"><path d="m5 9 7 7 7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-more" viewBox="0 0 24 24"><g fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></g></symbol>
   <symbol id="i-up" viewBox="0 0 24 24"><path d="M7 21H4.5a1.5 1.5 0 0 1-1.5-1.5v-7A1.5 1.5 0 0 1 4.5 11H7m0 10V11m0 10h9.6a2 2 0 0 0 2-1.6l1.3-6.5a2 2 0 0 0-2-2.4H14V5.6A2.6 2.6 0 0 0 11.4 3L7 11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-up-on" viewBox="0 0 24 24"><path d="M7 21H4.5a1.5 1.5 0 0 1-1.5-1.5v-7A1.5 1.5 0 0 1 4.5 11H7m0 10V11m0 10h9.6a2 2 0 0 0 2-1.6l1.3-6.5a2 2 0 0 0-2-2.4H14V5.6A2.6 2.6 0 0 0 11.4 3L7 11" fill="currentColor" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
   <symbol id="i-thumbdown" viewBox="0 0 24 24"><g transform="rotate(180 12 12)"><path d="M7 21H4.5a1.5 1.5 0 0 1-1.5-1.5v-7A1.5 1.5 0 0 1 4.5 11H7m0 10V11m0 10h9.6a2 2 0 0 0 2-1.6l1.3-6.5a2 2 0 0 0-2-2.4H14V5.6A2.6 2.6 0 0 0 11.4 3L7 11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></g></symbol>
   <symbol id="i-wave" viewBox="0 0 24 24"><path d="M2 12c2.5 0 2.5-5 5-5s2.5 10 5 10 2.5-10 5-10 2.5 5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
   <symbol id="i-music" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 18V5.5l11-2V16"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/></g></symbol>
@@ -41,6 +42,7 @@
   <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
   <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20.3s-7.6-4.6-9.3-9.3C1.5 7.6 3.7 4.5 7 4.5c2.1 0 3.6 1.2 5 3 1.4-1.8 2.9-3 5-3 3.3 0 5.5 3.1 4.3 6.5-1.7 4.7-9.3 9.3-9.3 9.3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
   <symbol id="i-heart-on" viewBox="0 0 24 24"><path d="M12 20.3s-7.6-4.6-9.3-9.3C1.5 7.6 3.7 4.5 7 4.5c2.1 0 3.6 1.2 5 3 1.4-1.8 2.9-3 5-3 3.3 0 5.5 3.1 4.3 6.5-1.7 4.7-9.3 9.3-9.3 9.3z" fill="currentColor" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5.5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="18.5" r="2.5"/><path d="m8.2 10.8 7.6-4.1M8.2 13.2l7.6 4.1"/></g></symbol>
   <symbol id="i-download" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7 10.5 5 5 5-5"/><path d="M5 19.5h14"/></g></symbol>
   <symbol id="i-expand" viewBox="0 0 24 24"><path d="M14 4h6v6M10 20H4v-6M20 4l-6.5 6.5M4 20l6.5-6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-volume"viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></g></symbol>
@@ -165,6 +167,7 @@
   <img src="/static/mark.png" alt="" class="login-mark">
   <img src="/static/wordmark.png" alt="Walle Player" class="login-word">
   <p class="login-server" id="login-server">Проверяю связь с компьютером…</p>
+  <p class="login-share" id="login-share" hidden>Вам поделились музыкой из этой библиотеки. Ссылка открывается только у тех, кто уже слушает её на этом устройстве, — попросите доступ, и после разрешения она откроется.</p>
   <div id="join-box">
     <p>Представьтесь — на компьютере появится запрос, хозяин библиотеки нажмёт «Разрешить», и плеер откроется сам.</p>
     <form id="join-form">

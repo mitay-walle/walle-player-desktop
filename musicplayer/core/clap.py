@@ -169,9 +169,31 @@ def embed_tracks(db: Database, ids: list[int] | None = None, ctx: JobContext | N
     w = Worker("audio")
     ctx.log(f"CLAP на устройстве: {w.info.get('device')}")
     done, failed = 0, []
+    from . import remotefile
+    slots, held = threading.Semaphore(8), {}            # files fetched from the library server, a few ahead
+
+    def items():
+        for it in todo:
+            if it["path"] and not os.path.exists(it["path"]) and remotefile.available():
+                slots.acquire()
+                held[it["id"]] = None
+                try:
+                    held[it["id"]] = remotefile.fetch(it["id"], it["path"])
+                    it = {**it, "path": held[it["id"]]}
+                except Exception:  # noqa: BLE001 - the worker reports the missing file as this track's error
+                    pass
+            yield it
+
+    def release(tid) -> None:
+        if tid in held:
+            p = held.pop(tid)
+            if p:
+                Path(p).unlink(missing_ok=True)
+            slots.release()
     try:
-        w.send(todo)
+        w.send(items())
         for r in w.results(len(todo)):
+            release(r.get("id"))
             ctx.check()
             if "emb" in r:
                 db.set_embedding(r["id"], EMB_MODEL, base64.b64decode(r["emb"]))
@@ -181,6 +203,8 @@ def embed_tracks(db: Database, ids: list[int] | None = None, ctx: JobContext | N
             ctx.progress(done, len(todo), f"{done}/{len(todo)}")
     finally:
         w.close()
+        for tid in list(held):                          # cancelled: no fetched file stays behind
+            release(tid)
     ctx.log(f"CLAP готов: {done - len(failed)} эмбеддингов, ошибок {len(failed)}")
     return {"embedded": done - len(failed), "failed": failed}
 

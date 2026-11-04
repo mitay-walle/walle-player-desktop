@@ -22,6 +22,16 @@ log = logging.getLogger(__name__)
 PRELOAD_BEFORE_END_MS = 8000
 
 
+source_hook = None        # set by the window when the library lives on a server: the stream when the file is not here
+
+
+def source_of(track: dict) -> str:
+    """What to open for ``track``: its file, or (library on a server) the server's stream."""
+    if source_hook is not None:
+        return source_hook(track)
+    return str(Path(track["path"]))
+
+
 class _Deck:
     """One QMediaPlayer with its own audio output."""
 
@@ -197,7 +207,8 @@ class PlayerController(QObject):
     # ---- internals ----------------------------------------------------
     def _load(self, deck: _Deck, track: dict) -> None:
         deck.track_id = track["id"]
-        deck.player.setSource(QUrl.fromLocalFile(str(Path(track["path"]))))
+        src = source_of(track)
+        deck.player.setSource(QUrl(src) if src.startswith(("http://", "https://")) else QUrl.fromLocalFile(src))
 
     def _start_current(self) -> None:
         t = self.current

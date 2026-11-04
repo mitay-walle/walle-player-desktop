@@ -57,6 +57,10 @@ def test_wave_and_value_lists_leave_hidden_out(db):
     assert "Meteora" not in albums
     hidden.set_hidden(db, "owner", "genre", "Pop")
     assert "Pop" not in [r["name"] for r in hidden.visible_values(db, "owner", "genre", db.list_values("genre"))]
+    hidden.set_hidden(db, "owner", "track", str(ids["Группа крови"]))       # the count is what the artist page shows
+    n = {r["name"]: r["n"] for r in db.list_values("artist", "owner")}
+    assert n["Кино"] == 1 == len(db.search(artist="Кино", hide_user="owner")) and "Imagine Dragons" not in n
+    assert {r["name"]: r["n"] for r in db.list_values("artist", "guest1")}["Кино"] == 2
 
 
 def test_desktop_hide_undo_and_the_hidden_tab(qtbot, app, library):
@@ -101,6 +105,7 @@ def test_api_hidden_is_per_listener(lib, client):
     assert titles_of(GUEST, "?hidden=1") == ["Summer", "Весна", "Зима"]                # «показать скрытое»
     assert titles_of(AUTH) == ["Summer", "Весна", "Зима"]                              # the owner is not affected
     assert [a["name"] for a in client.get("/api/artists", headers=GUEST).json()["items"]] == ["Other"]
+    assert all("plays" in a for a in client.get("/api/artists", headers=AUTH).json()["items"])     # for sorting
     assert [a["name"] for a in client.get("/api/albums", headers=GUEST).json()["items"]] == ["Hits"]
     wave = client.post("/api/wave/next", json={"moods": ["Весёлое"], "n": 10}, headers=GUEST).json()["items"]
     assert wave == []                                                                   # «Весна» is Кино: hidden

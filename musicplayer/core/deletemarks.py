@@ -1,8 +1,8 @@
-"""«Пометить на удаление»: listeners mark a track or an album from their phone / the web player; the owner looks through
-the list in the desktop app and deletes them (Recycle Bin) or takes the mark off.  Qt-free.
+"""«Пометить на удаление»: listeners mark a track, an album or an artist from their phone / the web player; the owner
+looks through the list in the desktop app and deletes them (Recycle Bin) or takes the mark off.  Qt-free.
 
-Keys follow «Избранное»: a track by its id, an album as "artist\\x1falbum" (the album artist, else the artist).
-The list can be saved to a JSON file and loaded elsewhere (another computer, another copy of the library): there the
+Keys follow «Избранное»: a track by its id, an album as "artist\\x1falbum" (the album artist, else the artist), an
+artist by the name.  The list can be saved to a JSON file and loaded elsewhere (another computer, another copy of the library): there the
 tracks are found by their path, else by artist and title (core/likeimport.py).
 """
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import time
 
-KINDS = {"track": "Треки", "album": "Альбомы"}
+KINDS = {"track": "Треки", "album": "Альбомы", "artist": "Исполнители"}
 SEP = "\x1f"
 SCHEMA = ("CREATE TABLE IF NOT EXISTS delete_marks(kind TEXT, key TEXT, user TEXT, added REAL, "
           "PRIMARY KEY(kind, key, user))")
@@ -31,7 +31,7 @@ def track_album_key(t: dict) -> str:
 
 def set_mark(db, user: str, kind: str, key: str, on: bool = True, added: float | None = None) -> None:
     if kind not in KINDS or not str(key).strip():
-        raise ValueError("kind: track | album, key: required")
+        raise ValueError("kind: track | album | artist, key: required")
     ensure(db)
     if on:
         db.conn.execute("INSERT OR IGNORE INTO delete_marks VALUES(?,?,?,?)", (kind, str(key), user, added or time.time()))
@@ -60,6 +60,19 @@ def album_tracks(db, key: str) -> list[dict]:
     return [r for r in rows if (r.get("albumartist") or r.get("artist") or "").casefold() == artist.casefold()]
 
 
+def artist_tracks(db, name: str) -> list[dict]:
+    """The artist's own tracks (by the album artist, else the artist) - not the ones he only sings on."""
+    rows = db.search(artist=name, order="album", limit=10**6) if name.strip() else []
+    return [r for r in rows if (r.get("albumartist") or r.get("artist") or "").casefold() == name.casefold()]
+
+
+def tracks_of(db, kind: str, key: str) -> list[dict]:
+    if kind == "track":
+        t = db.get_track(int(key)) if key.isdigit() else None
+        return [t] if t is not None else []
+    return album_tracks(db, key) if kind == "album" else artist_tracks(db, key) if kind == "artist" else []
+
+
 def listing(db, names: dict[str, str] | None = None) -> list[dict]:
     """Everything marked, newest first: {kind, key, title, sub, by: [names], added, tracks: [track dicts]}.
     Marks of tracks / albums that are gone from the library are dropped."""
@@ -77,12 +90,17 @@ def listing(db, names: dict[str, str] | None = None) -> list[dict]:
             if t is None or db.conn.execute("SELECT missing FROM tracks WHERE id=?", (t["id"],)).fetchone()[0]:
                 continue
             g.update(title=t["title"] or "без названия", sub=f"{t['artist']} — {t['album'] or 'без альбома'}", tracks=[t])
-        else:
+        elif kind == "album":
             tracks = album_tracks(db, key)
             if not tracks:
                 continue
             artist, _, album = key.partition(SEP)
             g.update(title=album or "без альбома", sub=f"{artist} · треков: {len(tracks)}", tracks=tracks)
+        else:
+            tracks = artist_tracks(db, key)
+            if not tracks:
+                continue
+            g.update(title=key, sub=f"исполнитель · треков: {len(tracks)}", tracks=tracks)
         out.append(g)
     return sorted(out, key=lambda g: g["added"], reverse=True)
 
@@ -99,12 +117,15 @@ def drop_deleted(db, track_ids) -> None:
     for (key,) in db.conn.execute("SELECT DISTINCT key FROM delete_marks WHERE kind='album'").fetchall():
         if not album_tracks(db, key):
             db.conn.execute("DELETE FROM delete_marks WHERE kind='album' AND key=?", (key,))
+    for (key,) in db.conn.execute("SELECT DISTINCT key FROM delete_marks WHERE kind='artist'").fetchall():
+        if not artist_tracks(db, key):
+            db.conn.execute("DELETE FROM delete_marks WHERE kind='artist' AND key=?", (key,))
     db.conn.commit()
 
 
 # ---- a file to take the list elsewhere ---------------------------------------------------------------------
 def export(db, names: dict[str, str] | None = None) -> str:
-    """JSON: every marked track (an album as its tracks too) with path, artist, title, album, who and when."""
+    """JSON: every marked track (an album or an artist as its tracks too) with path, artist, title, album, who and when."""
     items = []
     for g in listing(db, names):
         for t in g["tracks"]:
@@ -128,13 +149,18 @@ def load(db, text: str, user: str = "owner") -> dict:
         (found.append((it, tid)) if tid else rest.append(it))
     res = likeimport.match(db, [{"artist": it.get("artist", ""), "title": it.get("title", ""), "src": it} for it in rest])
     found += [(i["src"], t["id"]) for i, t in res["matched"]]
-    albums = set()
+    albums, artists = set(), set()
     for it, tid in found:
         if it.get("kind") == "album":
             t = db.get_track(tid)
             albums.add(track_album_key(t))
+        elif it.get("kind") == "artist":
+            t = db.get_track(tid)
+            artists.add(t.get("albumartist") or t.get("artist") or "")
         else:
             set_mark(db, user, "track", str(tid), True, it.get("added"))
     for key in albums:
         set_mark(db, user, "album", key, True)
+    for key in artists - {""}:
+        set_mark(db, user, "artist", key, True)
     return {"marked": len(found), "unmatched": [likeimport.describe(i) for i in res["unmatched"]]}

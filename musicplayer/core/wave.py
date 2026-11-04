@@ -3,9 +3,10 @@
 Candidates are tracks you CONFIRMED for the chosen moods ("known") plus tracks the model/Claude only GUESSED
 for them with enough confidence ("guess").  A share of every batch (``explore``) is guesses: while you listen
 you rate them - 👍 confirms the mood (a new label), 👎 rejects it (a negative example).  Character:
-favourite (played more), unfamiliar (rarely played), mixed, weak (the least certain guesses first: rating them
-fixes the labels the model is worst at).  Genres narrow the wave (any of the chosen genres); a wave of genres
-only, without moods, plays every track of those genres.  Qt-free.
+favourite (played more), unfamiliar (rarely played, never a liked track), mixed, weak (the least certain guesses first: rating them
+fixes the labels the model is worst at).  Genres, lyrics languages and voices narrow the wave (any of the chosen
+ones of each); a wave of those only, without moods, plays every track that fits.  Radio: a wave from one track or
+one artist - the closest tracks by sound and tags (core/similar.py), the moods are not asked then.  Qt-free.
 """
 
 from __future__ import annotations
@@ -16,16 +17,93 @@ import time
 from .db import Database, rare_weights
 
 CHARACTERS = {"favorite": "Любимое", "unfamiliar": "Незнакомое", "mixed": "Вперемешку", "weak": "Плохо размеченное"}
+VOICES = {"voc": "С вокалом", "inst": "Без слов", "female": "Женский вокал", "male": "Мужской вокал",
+          "raspy": "Хриплый вокал"}
 RECENT_SEC = 2 * 3600
+RADIO_TOP = 300                                         # a radio plays among the closest tracks only
+RADIO_TTL = 600.0
+_radio_cache: dict[tuple, tuple[float, dict[int, float]]] = {}
+
+
+def radio_scores(db: Database, track: int | None = None, artist: str | None = None) -> dict[int, float]:
+    """{track id: closeness} of the RADIO_TOP closest tracks to a track / an artist (the artist's own tracks first).
+    Kept for 10 minutes: every next batch of the same radio asks again."""
+    key = (db.path, track, (artist or "").casefold())
+    hit = _radio_cache.get(key)
+    if hit and time.monotonic() - hit[0] < RADIO_TTL:
+        return hit[1]
+    from .similar import radio_scores as closeness
+    pool = db.search(limit=10**9)
+    if track is not None:
+        seeds = [t for t in pool if t["id"] == track] or ([db.get_track(track)] if db.get_track(track) else [])
+    else:
+        a = (artist or "").casefold()
+        seeds = [t for t in pool if a in ((t["artist"] or "").casefold(), (t.get("albumartist") or "").casefold())]
+    if not seeds:
+        return {}
+    got = closeness(db, seeds, pool)
+    top = dict(sorted(got.items(), key=lambda x: x[1], reverse=True)[:RADIO_TOP])
+    if artist is not None:                               # the artist's own songs belong to his radio
+        top.update({s["id"]: 1.0 for s in seeds})
+    else:
+        top.pop(track, None)
+    _radio_cache[key] = (time.monotonic(), top)
+    if len(_radio_cache) > 32:
+        _radio_cache.pop(next(iter(_radio_cache)))
+    return top
+
+
+def _tracks(db: Database, ids: list[int]) -> list[dict]:
+    from .db import TRACK_COLS
+    rows = []
+    for i in range(0, len(ids), 500):
+        part = ids[i:i + 500]
+        rows += [dict(r) for r in db.conn.execute(
+            f"SELECT {TRACK_COLS} FROM tracks WHERE missing=0 AND id IN ({','.join('?' * len(part))})", part)]
+    return db._enrich(rows)
+
+
+def wave_filters(db: Database) -> dict:
+    """What the wave can be narrowed to in this library: {"wave_langs": [{key, name, n}], "wave_voices": [...]}."""
+    from .langvocal import LANGS
+    langs = [{"key": r[0], "name": LANGS.get(r[0], r[0]).capitalize(), "n": r[1]} for r in db.conn.execute(
+        "SELECT lang, COUNT(*) AS n FROM tracks WHERE missing=0 AND lang IS NOT NULL AND lang<>'' GROUP BY lang "
+        "ORDER BY n DESC")]
+    if any(x["key"] == "ru" for x in langs) and len(langs) > 1:
+        langs.insert(1, {"key": "foreign", "name": "Не на русском",
+                         "n": sum(x["n"] for x in langs if x["key"] != "ru")})
+    n = dict(db.conn.execute("SELECT vocal, COUNT(*) FROM tracks WHERE missing=0 AND vocal IS NOT NULL GROUP BY vocal"))
+    n.update(db.conn.execute("SELECT f.flag, COUNT(*) FROM track_flags f JOIN tracks t ON t.id=f.track_id "
+                             "WHERE t.missing=0 AND f.flag IN ('female','male','raspy') GROUP BY f.flag"))
+    voices = [{"key": k, "name": v, "n": n.get(k, 0)} for k, v in VOICES.items() if n.get(k)]
+    return {"wave_langs": langs, "wave_voices": voices}
+
+
+def voice_fits(t: dict, voices: set[str]) -> bool:
+    flags = set(t.get("flags") or [])
+    have = set(flags & {"female", "male", "raspy"})
+    if t.get("vocal") == "inst":
+        have.add("inst")
+    elif t.get("vocal") == "voc" or have:
+        have.add("voc")
+    return bool(have & voices)
+
+
+def lang_fits(t: dict, langs: set[str]) -> bool:
+    lang = t.get("lang")
+    return lang in langs or ("foreign" in langs and lang != "ru")
 
 
 class Wave:
     def __init__(self, db: Database, moods: list[str] | None = None, character: str = "mixed",
                  min_conf: float = 0.55, explore: float = 0.3, rng: random.Random | None = None,
                  genres: list[str] | None = None, plays: dict[int, tuple[int, float | None]] | None = None,
-                 user: str | None = "owner") -> None:
+                 user: str | None = "owner", langs: list[str] | None = None, voices: list[str] | None = None,
+                 seed_track: int | None = None, seed_artist: str | None = None) -> None:
         """``plays``: {track id: (count, last played)} of another listener (a guest on a phone): favourite/unfamiliar
-        and «not again so soon» then follow HIS listening, not the catalogue's."""
+        and «not again so soon» then follow HIS listening, not the catalogue's.  ``langs``: lyrics languages
+        (core/langvocal.py LANGS, "foreign" = not Russian); ``voices``: VOICES keys.  ``seed_track`` /
+        ``seed_artist``: a radio from that track / artist instead of moods."""
         self.db = db
         self.plays = plays
         self.user = user                                 # whose «Не показывать» the wave respects (None: nobody's)
@@ -36,17 +114,28 @@ class Wave:
         self.min_conf = min_conf
         self.explore = explore
         self.rng = rng or random.Random()
+        self.langs = [str(x) for x in (langs or []) if x]
+        self.voices = [str(x) for x in (voices or []) if x in VOICES]
+        self.seed_track = seed_track
+        self.seed_artist = seed_artist or None
+
+    @property
+    def is_radio(self) -> bool:
+        return self.seed_track is not None or self.seed_artist is not None
 
     def _pool(self) -> tuple[dict[int, dict], dict[int, dict]]:
         """(known, guess) tracks keyed by id; each gets ``wave_kind`` and ``wave_moods`` (which chosen moods match)."""
         known: dict[int, dict] = {}
         guess: dict[int, dict] = {}
-        if self.genres and not self.moods:              # genres only: every track of them, nothing to rate
-            for g in self.genres:
-                for t in self.db.search(genre=g, limit=10**9):
-                    known.setdefault(t["id"], {**t, "wave_kind": "known", "wave_moods": []})
-            return known, guess
-        names = self.moods or [m["name"] for m in self.db.list_moods() if m["n"]]
+        if self.is_radio:                                # radio: the closest tracks, nothing to rate
+            near = radio_scores(self.db, self.seed_track, self.seed_artist)
+            for t in _tracks(self.db, list(near)):
+                known[t["id"]] = {**t, "wave_kind": "known", "wave_moods": [], "wave_sim": near[t["id"]]}
+        elif not self.moods and (self.genres or self.langs or self.voices):   # no moods: every track that fits
+            rows = self.db.search(genre=self.genres[0], limit=10**9) if len(self.genres) == 1 else self.db.search(limit=10**9)
+            known = {t["id"]: {**t, "wave_kind": "known", "wave_moods": []} for t in rows}
+        by_mood = not self.is_radio and (self.moods or not (self.genres or self.langs or self.voices))
+        names = (self.moods or [m["name"] for m in self.db.list_moods() if m["n"]]) if by_mood else []
         for mood in names:
             for t in self.db.search(mood=mood, mood_status="confirmed", limit=10**9):
                 k = known.setdefault(t["id"], {**t, "wave_kind": "known", "wave_moods": []})
@@ -59,7 +148,7 @@ class Wave:
                     g["wave_moods"].append(mood)
         # moods the model assigned by itself (source 'auto') are shown to the user as guesses to confirm
         for tid in [i for i, t in known.items()
-                    if all(t["mood_sources"].get(m) == "auto" for m in t["wave_moods"])]:
+                    if t["wave_moods"] and all(t["mood_sources"].get(m) == "auto" for m in t["wave_moods"])]:
             t = known.pop(tid)
             t["wave_kind"] = "auto"
             t["wave_conf"] = max((t["mood_conf"].get(m) or 0) for m in t["wave_moods"])
@@ -69,12 +158,41 @@ class Wave:
             fits = lambda t: any(g.casefold() in want for g in t.get("genres", []))  # noqa: E731
             known = {i: t for i, t in known.items() if fits(t)}
             guess = {i: t for i, t in guess.items() if fits(t)}
+        if self.langs:
+            want_l = set(self.langs)
+            known = {i: t for i, t in known.items() if lang_fits(t, want_l)}
+            guess = {i: t for i, t in guess.items() if lang_fits(t, want_l)}
+        if self.voices:
+            want_v = set(self.voices)
+            known = {i: t for i, t in known.items() if voice_fits(t, want_v)}
+            guess = {i: t for i, t in guess.items() if voice_fits(t, want_v)}
         if self.user:                                   # «Не показывать»: never in this listener's wave
             from .hidden import matcher
             hidden = matcher(self.db, self.user)
             known = {i: t for i, t in known.items() if not hidden(t)}
             guess = {i: t for i, t in guess.items() if not hidden(t)}
+        if self.character == "unfamiliar":              # a liked track, album or artist is not unfamiliar, however rarely played
+            liked = self._liked()
+            known = {i: t for i, t in known.items() if not liked(t)}
+            guess = {i: t for i, t in guess.items() if not liked(t)}
         return known, guess
+
+    def _liked(self):
+        """``liked(track_dict) -> bool``: the listener liked the track, its album or one of its artists («A & B»)."""
+        from .feat import split_collab
+        from .likes import keys
+        who = self.user or "owner"
+        tracks = {int(k) for k in keys(self.db, who, "track") if str(k).isdigit()}
+        artists = {k.casefold() for k in keys(self.db, who, "artist")}
+        albums = {k.casefold() for k in keys(self.db, who, "album")}
+
+        def liked(t: dict) -> bool:
+            tags = {(t.get("artist") or "").casefold(), (t.get("albumartist") or "").casefold()} - {""}
+            names = tags | {p.casefold() for a in tags for p in split_collab(a)}
+            album = (t.get("album") or "").casefold()
+            return (t["id"] in tracks or bool(names & artists)
+                    or bool(album) and any(f"{a}\x1f{album}" in albums for a in tags))
+        return liked
 
     def _weights(self, rows: list[dict]) -> list[float]:
         if self.plays is not None:
@@ -89,6 +207,8 @@ class Wave:
             w = rare_weights(plays)
         else:
             w = [1.0] * len(rows)
+        if self.is_radio:                                # the closer, the more often
+            w = [x * max(r.get("wave_sim") or 0.0, 0.02) ** 2 for x, r in zip(w, rows)]
         now = time.time()
         return [x * (0.05 if r.get("last_played") and now - r["last_played"] < RECENT_SEC else 1.0)
                 for x, r in zip(w, rows)]

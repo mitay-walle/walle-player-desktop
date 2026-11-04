@@ -38,10 +38,14 @@ class DeleteMarksDialog(QDialog):
         self.btn_export.setToolTip("JSON со всеми помеченными треками (путь, исполнитель, название, кто и когда пометил)")
         self.btn_import = QPushButton("Загрузить из файла…")
         self.btn_import.setToolTip("Пометки из выгруженного файла: треки находятся по пути, иначе по исполнителю и названию")
+        self.btn_redownload = QPushButton("На перекачку…")
+        self.btn_redownload.setToolTip("Список выбранного (или всего помеченного) для конвейера закачки: что найти и "
+                                       "скачать заново в хорошем качестве")
         row = QHBoxLayout()
         for b in (self.btn_delete, self.btn_keep, self.btn_show):
             row.addWidget(b)
         row.addStretch(1)
+        row.addWidget(self.btn_redownload)
         row.addWidget(self.btn_export)
         row.addWidget(self.btn_import)
         lay = QVBoxLayout(self)
@@ -53,6 +57,7 @@ class DeleteMarksDialog(QDialog):
         self.btn_show.clicked.connect(self.show_selected)
         self.btn_export.clicked.connect(self.export)
         self.btn_import.clicked.connect(self.load)
+        self.btn_redownload.clicked.connect(self.redownload)
         self.tree.itemSelectionChanged.connect(self._buttons)
         self.refresh()
 
@@ -77,6 +82,7 @@ class DeleteMarksDialog(QDialog):
                           "«Удалить…» или «Снять пометку»." if self.groups else
                           "Ничего не помечено. Пометить трек или альбом можно в меню трека в веб-плеере и в приложении.")
         self.btn_export.setEnabled(bool(self.groups))
+        self.btn_redownload.setEnabled(bool(self.groups))
         self._buttons()
 
     def _selected(self) -> list[dict]:
@@ -111,6 +117,14 @@ class DeleteMarksDialog(QDialog):
                                               f"на удаление {time.strftime('%Y-%m-%d')}.json", "JSON (*.json)")
         if path:
             Path(path).write_text(deletemarks.export(self.ctx.db, self.names), encoding="utf-8")
+
+    def redownload(self) -> None:
+        from musicplayer.ui.quality_dialog import save_redownload
+        groups = self._selected() or self.groups
+        tracks = [{**t, "note": "помечено на удаление: " + ", ".join(g["by"])} for g in groups for t in g["tracks"]]
+        path = save_redownload(self, self.ctx, tracks, "помечено на удаление")
+        if path:
+            self.info.setText(f"Сохранено на перекачку: {path} (треков: {len(tracks)}). Удалить старые файлы — «Удалить…».")
 
     def load(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Загрузить список на удаление", "", "JSON (*.json);;Все файлы (*)")

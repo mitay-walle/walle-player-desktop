@@ -1,5 +1,7 @@
 """Headless library server (without the desktop window):  python -m musicplayer.server [--port N] [--tunnel]
 
+    python -m musicplayer.server --service      # a home server: also the VPS tunnel, scans, backups (service.py)
+
 Uses the same catalogue and access key (remote.json) as the app; MUSICPLAYER_HOME picks another data folder.
 """
 
@@ -7,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import logging.handlers
 import signal
 import threading
 
@@ -21,9 +24,16 @@ def main() -> int:
     ap.add_argument("--host", default="0.0.0.0", help="interface to listen on (default: all)")
     ap.add_argument("--tunnel", action="store_true", help="also open a Cloudflare quick tunnel (internet access)")
     ap.add_argument("--new-key", action="store_true", help="make a new owner key (old owner links stop working)")
+    ap.add_argument("--service", action="store_true",
+                    help="run as a home server: VPS tunnel from remote.json, scans of the music folder, backups")
+    ap.add_argument("--scan-every", type=float, default=30, help="--service: minutes between scans (default 30)")
+    ap.add_argument("--autotag", action="store_true",
+                    help="--service: tag the mood of new tracks here (audio analysis, needs requirements-autotag)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     home = data_dir()
+    if args.service:
+        return run_service(home, args)
     cfg = config.load(home)
     if args.new_key:
         cfg.owner["token"] = config.new_token()
@@ -54,6 +64,22 @@ def main() -> int:
     if tunnel:
         tunnel.stop()
     srv.stop()
+    return 0
+
+
+def run_service(home, args) -> int:
+    from musicplayer.server.service import Service
+    handler = logging.handlers.RotatingFileHandler(home / "server.log", maxBytes=2 << 20, backupCount=3,
+                                                   encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+    logging.getLogger().addHandler(handler)
+    svc = Service(home, args.scan_every, args.autotag, args.host, args.port)
+    if not svc.start():
+        return 1
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda *_: svc._stop.set())
+    svc.wait()
+    svc.stop()
     return 0
 
 

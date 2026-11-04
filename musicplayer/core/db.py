@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .feat import parse as parse_feat
+from .feat import split_collab
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tracks(
@@ -107,6 +108,13 @@ def weighted_order(rows: list[dict], power: float = 1.0, rng: random.Random | No
     return [r for _, r in keyed]
 
 
+# Every name a track is listed under in the artist lists: its (album) artist - or, for «A, B» / «A и B», each of the
+# artists of the collaboration («co» rows of track_artists) - and the featured artists («feat»).
+LINKS_CTE = ("links(name, id) AS (SELECT COALESCE(NULLIF(t.albumartist,''), t.artist), t.id FROM tracks t "
+             "WHERE NOT EXISTS(SELECT 1 FROM track_artists a WHERE a.track_id=t.id AND a.role='co') "
+             "UNION SELECT a.name, a.track_id FROM track_artists a WHERE a.role IN ('feat','co'))")
+
+
 class Database:
     def __init__(self, path: str | Path = ":memory:") -> None:
         self.path = str(path)
@@ -131,6 +139,9 @@ class Database:
         self._migrate()
         from .genres import load_custom
         load_custom(self)                         # the user's own families / sub-genres join the genre tree
+        from . import sync
+        if sync.enabled(self.conn):               # a synced catalogue: journal triggers of this version
+            sync.enable(self.conn)
 
     def _fill_default_prompts(self) -> None:
         """Text prompts (used by CLAP zero-shot) for the built-in moods; user-edited prompts are kept."""
@@ -174,7 +185,12 @@ class Database:
             self.normalize_all_genres()
             self._translate_hidden_genres()
             self.conn.execute("COMMIT")
-        self.conn.execute("PRAGMA user_version=18")
+        if self.conn.execute("PRAGMA user_version").fetchone()[0] < 19:
+            # v19: collaborations in the artist tag («A, B», «A и B») are listed under each artist; (with X) is a feat
+            self.conn.execute("BEGIN")
+            self.rebuild_artist_links()
+            self.conn.execute("COMMIT")
+        self.conn.execute("PRAGMA user_version=19")
 
     def _translate_hidden_genres(self) -> None:
         """Genres a listener hid («Не показывать») under their old names follow the vocabulary («Поп» -> Pop)."""
@@ -209,10 +225,49 @@ class Database:
                                   ((canonical(parent) or [parent])[0], name))
         load_custom(self)
 
-    def _set_feat(self, tid: int, title: str | None, artist: str | None) -> None:
-        self.conn.execute("DELETE FROM track_artists WHERE track_id=? AND role='feat'", (tid,))
-        self.conn.executemany("INSERT OR IGNORE INTO track_artists VALUES(?,?, 'feat')",
-                              [(tid, n) for n in parse_feat(title, artist).feat])
+    def _is_known_artist(self, name: str) -> bool:
+        return self.conn.execute("SELECT 1 FROM tracks WHERE missing=0 AND (artist=? COLLATE UNI OR "
+                                 "albumartist=? COLLATE UNI) LIMIT 1", (name, name)).fetchone() is not None
+
+    def _set_feat(self, tid: int, title: str | None, artist: str | None, known: set[str] | None = None) -> bool:
+        """The track's other artists in ``track_artists``: role «feat» - featured in the title / artist tag
+        («(feat. B)», «(with B)»); role «co» - the artists of a collaboration written in the artist tag («A, B»,
+        «A и B»), but only when one of them is an artist of the library on his own (so «Король и Шут» stays one act).
+        ``known``: casefolded names of the library's artists (a full rebuild passes it, a single track asks the catalogue).
+        True when the rows changed."""
+        c = self.conn
+        before = c.execute("SELECT name, role FROM track_artists WHERE track_id=? ORDER BY role, name", (tid,)).fetchall()
+        c.execute("DELETE FROM track_artists WHERE track_id=? AND role IN ('feat','co')", (tid,))
+        p = parse_feat(title, artist)
+        rows = [(tid, n, "feat") for n in p.feat]
+        main = p.artists[0] if p.artists else ""
+        aa = c.execute("SELECT albumartist FROM tracks WHERE id=?", (tid,)).fetchone()
+        aa = (aa[0] or "") if aa else ""
+        parts = split_collab(main) if main else []
+        # the lists key a track by its album artist when it has one: then the collaboration must contain him
+        low = {x.casefold() for x in parts}
+        if len(parts) > 1 and (not aa or aa == artist or aa.casefold() in low
+                               or {x.casefold() for x in split_collab(aa)} <= low):
+            known_part = any((x.casefold() in known) if known is not None else self._is_known_artist(x) for x in parts)
+            if known_part or (aa and aa != artist):          # an album artist inside the tag is evidence enough
+                rows += [(tid, n, "co") for n in parts]
+        c.executemany("INSERT OR IGNORE INTO track_artists VALUES(?,?,?)", rows)
+        after = c.execute("SELECT name, role FROM track_artists WHERE track_id=? ORDER BY role, name", (tid,)).fetchall()
+        return [tuple(r) for r in before] != [tuple(r) for r in after]
+
+    def rebuild_artist_links(self) -> int:
+        """Featured artists and collaborations of every track again (after a scan, a sync, a changed tag): a collaboration
+        is split when one of its artists is an artist of the library on his own.  Returns how many tracks changed."""
+        c = self.conn
+        known = {r[0].casefold() for r in c.execute(
+            "SELECT artist FROM tracks WHERE missing=0 AND artist<>'' UNION "
+            "SELECT albumartist FROM tracks WHERE missing=0 AND albumartist<>''") if r[0]}
+        changed = 0
+        for r in c.execute("SELECT id, title, artist FROM tracks").fetchall():
+            if self._set_feat(r["id"], r["title"], r["artist"], known):
+                self.refresh_fts(r["id"])
+                changed += 1
+        return changed
 
     def close(self) -> None:
         self.conn.close()
@@ -294,18 +349,21 @@ class Database:
         """One row per artist (album artist, else artist): tracks, albums, plays, years, top genres / moods,
         how much is labelled, language and voice."""
         c = self.conn
-        key = "COALESCE(NULLIF(t.albumartist,''), t.artist)"
+        key = "l.name"            # an artist's tracks: his own, those of a collaboration, those he is featured on
         rows = {r["a"]: dict(r) for r in c.execute(
-            f"SELECT {key} AS a, COUNT(*) AS tracks, COUNT(DISTINCT t.album) AS albums, SUM(t.play_count) AS plays, "
+            f"WITH {LINKS_CTE} SELECT {key} AS a, COUNT(*) AS tracks, COUNT(DISTINCT t.album) AS albums, SUM(t.play_count) AS plays, "
             f"MIN(t.year) AS y0, MAX(t.year) AS y1, MAX(t.last_played) AS last, "
             f"SUM(EXISTS(SELECT 1 FROM track_moods m WHERE m.track_id=t.id AND m.source IN ('manual','seed'))) AS labelled, "
             f"SUM(t.lang='ru') AS ru, SUM(t.vocal='inst') AS inst "
-            f"FROM tracks t WHERE t.missing=0 AND {key} IS NOT NULL GROUP BY a")}
-        for kind, sql in (("genres", f"SELECT {key} AS a, g.genre AS v, COUNT(*) AS n FROM track_genres g JOIN tracks t ON t.id=g.track_id "
+            f"FROM links l JOIN tracks t ON t.id=l.id WHERE t.missing=0 AND {key} IS NOT NULL GROUP BY a")}
+        for kind, sql in (("genres", f"WITH {LINKS_CTE} SELECT {key} AS a, g.genre AS v, COUNT(*) AS n FROM links l "
+                                     f"JOIN tracks t ON t.id=l.id JOIN track_genres g ON g.track_id=t.id "
                                      f"WHERE t.missing=0 GROUP BY a, v"),
-                          ("moods", f"SELECT {key} AS a, m.name AS v, COUNT(*) AS n FROM track_moods tm JOIN moods m ON m.id=tm.mood_id "
-                                    f"JOIN tracks t ON t.id=tm.track_id WHERE t.missing=0 AND tm.source IN ('manual','seed','auto') GROUP BY a, v"),
-                          ("voice", f"SELECT {key} AS a, f.flag AS v, COUNT(*) AS n FROM track_flags f JOIN tracks t ON t.id=f.track_id "
+                          ("moods", f"WITH {LINKS_CTE} SELECT {key} AS a, m.name AS v, COUNT(*) AS n FROM links l "
+                                    f"JOIN tracks t ON t.id=l.id JOIN track_moods tm ON tm.track_id=t.id "
+                                    f"JOIN moods m ON m.id=tm.mood_id WHERE t.missing=0 AND tm.source IN ('manual','seed','auto') GROUP BY a, v"),
+                          ("voice", f"WITH {LINKS_CTE} SELECT {key} AS a, f.flag AS v, COUNT(*) AS n FROM links l "
+                                    f"JOIN tracks t ON t.id=l.id JOIN track_flags f ON f.track_id=t.id "
                                     f"WHERE t.missing=0 AND f.flag IN ('male','female') GROUP BY a, v")):
             for r in c.execute(sql):
                 if r["a"] in rows:
@@ -317,6 +375,20 @@ class Database:
             d["artist"] = a
             out.append(d)
         return sorted(out, key=lambda d: (-d["tracks"], d["artist"].casefold()))
+
+    def artist_covers(self, name: str | None = None) -> dict[str, str]:
+        """Each artist's (album artist, else artist) most common cover - its biggest album: the artist's picture until
+        a photo comes (core/artistimg.py).  ``name``: that artist only."""
+        best: dict[str, tuple[int, str]] = {}
+        a = "COALESCE(NULLIF(albumartist,''), artist)"
+        one = f" AND {a}=?" if name is not None else ""
+        for r in self.conn.execute(
+                f"SELECT {a} AS a, cover_key AS c, COUNT(*) AS n FROM tracks "
+                f"WHERE missing=0 AND cover_key IS NOT NULL AND cover_key<>''{one} GROUP BY a, c",
+                (name,) if name is not None else ()):
+            if r["a"] and r["n"] > best.get(r["a"], (0, ""))[0]:
+                best[r["a"]] = (r["n"], r["c"])
+        return {a: c for a, (_n, c) in best.items()}
 
     def _set_genres(self, tid: int, genres: list[str]) -> None:
         """Every genre write goes through the vocabulary (core/genres.py): canonical names, sub-genre -> its family."""
@@ -515,13 +587,29 @@ class Database:
         kw.pop("order", None)
         return len(self.search(**kw))
 
-    def list_values(self, kind: str) -> list[dict]:
-        """Group counts: kind is genre | artist | album | year."""
+    def list_values(self, kind: str, hide_user: str | None = None, guest: str | None = None) -> list[dict]:
+        """Group counts: kind is genre | artist | album | year.  ``hide_user``: artists and albums count only the tracks
+        that listener sees (without what he chose «Не показывать»: tracks, genres, moods); artists also get ``plays``
+        (a ``guest``'s own plays of the library server, otherwise the catalogue's)."""
+        if hide_user and kind in ("artist", "album"):
+            from .hidden import SQL_VISIBLE, ensure
+            ensure(self)
+            plays = ("(SELECT COUNT(*) FROM remote_plays p WHERE p.track_id=t.id AND p.user=?)" if guest
+                     else "t.play_count")
+            q = {"artist": f"WITH {LINKS_CTE} SELECT l.name AS name, COUNT(DISTINCT t.id) AS n, "
+                           f"SUM({plays}) AS plays FROM links l JOIN tracks t ON t.id=l.id "
+                           f"WHERE t.missing=0 AND {SQL_VISIBLE} GROUP BY l.name COLLATE UNI ORDER BY l.name COLLATE UNI",
+                 "album": "SELECT t.album AS name, COALESCE(NULLIF(t.albumartist,''),t.artist) AS artist, "
+                          "MAX(t.year) AS year, MAX(t.cover_key) AS cover_key, COUNT(*) AS n FROM tracks t "
+                          f"WHERE t.missing=0 AND t.album<>'' AND {SQL_VISIBLE} GROUP BY t.album, artist "
+                          "ORDER BY artist COLLATE UNI, year"}[kind]
+            args = (guest, hide_user) if guest and kind == "artist" else (hide_user,)
+            return [dict(r) for r in self.conn.execute(q, args)]
         q = {
             "genre": "SELECT g.genre AS name, COUNT(*) AS n FROM track_genres g JOIN tracks t ON t.id=g.track_id "
                      "WHERE t.missing=0 GROUP BY g.genre COLLATE UNI ORDER BY n DESC",
-            "artist": "SELECT COALESCE(NULLIF(albumartist,''),artist) AS name, COUNT(*) AS n FROM tracks "
-                      "WHERE missing=0 GROUP BY name COLLATE UNI ORDER BY name COLLATE UNI",
+            "artist": f"WITH {LINKS_CTE} SELECT l.name AS name, COUNT(DISTINCT t.id) AS n FROM links l "
+                      "JOIN tracks t ON t.id=l.id WHERE t.missing=0 GROUP BY l.name COLLATE UNI ORDER BY l.name COLLATE UNI",
             "album": "SELECT album AS name, COALESCE(NULLIF(albumartist,''),artist) AS artist, MAX(year) AS year, "
                      "MAX(cover_key) AS cover_key, COUNT(*) AS n FROM tracks WHERE missing=0 AND album<>'' "
                      "GROUP BY album, artist ORDER BY artist COLLATE UNI, year",

@@ -155,3 +155,21 @@ def test_labels_export_import_roundtrip_by_path(db, library, tmp_path, monkeypat
     lio.import_(out)
     assert set(db.get_track(a)["moods"]) == {"Грустное", "Рейв"} and db.get_track(b)["mood_sources"] == {"Весёлое": "manual"}
     assert db.get_track(c)["moods"] == [] and db.get_track(a)["vocal"] == "inst"
+
+
+def test_library_moved_to_another_disk_keeps_its_tracks(db, tmp_path):
+    """The library on a disk that got another letter (another computer): same tracks, labels and likes survive."""
+    import shutil
+    old = tmp_path / "E" / "Music"
+    make_mp3(old / "Кино" / "Группа крови" / "01.mp3", artist="Кино", title="Группа крови")
+    make_mp3(old / "Кино" / "Группа крови" / "02.mp3", artist="Кино", title="Закрой за мной дверь")
+    scan(db, old, tmp_path / "c")
+    ids = sorted(t["id"] for t in db.search(limit=10))
+    db.set_moods(ids[:1], ["Грустное"], "set")
+    new = tmp_path / "F" / "Library"
+    shutil.move(str(old), str(new))
+    r = scan(db, new, tmp_path / "c")
+    assert r["moved"] == 2 and r["added"] == 0
+    tracks = db.search(limit=10)
+    assert sorted(t["id"] for t in tracks) == ids and all(str(new) in db.get_track(i)["path"] for i in ids)
+    assert db.get_track(ids[0])["moods"] == ["Грустное"]

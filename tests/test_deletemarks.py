@@ -16,7 +16,10 @@ def test_any_listener_marks_and_nothing_is_deleted_by_the_server(lib, client):
     assert client.post("/api/delete-marks", json={"kind": "album", "key": album}, headers=AUTH).status_code == 200
     assert client.get(f"/api/tracks/{tid}", headers=AUTH).status_code == 200                       # still there
     assert client.post("/api/delete-marks", json={"kind": "track", "key": "999999"}, headers=GUEST).status_code == 404
-    assert client.post("/api/delete-marks", json={"kind": "artist", "key": "Кино"}, headers=GUEST).status_code == 400
+    assert client.post("/api/delete-marks", json={"kind": "artist", "key": "Кино"}, headers=GUEST).status_code == 200
+    assert client.post("/api/delete-marks", json={"kind": "artist", "key": "Нет такого"}, headers=GUEST).status_code == 404
+    assert client.post("/api/delete-marks", json={"kind": "planet", "key": "x"}, headers=GUEST).status_code == 400
+    client.post("/api/delete-marks", json={"kind": "artist", "key": "Кино", "on": False}, headers=GUEST)
     r = client.post("/api/delete-marks", json={"kind": "track", "key": tid, "on": False}, headers=GUEST)
     assert r.json()["on"] is False and client.get("/api/delete-marks", headers=GUEST).json()["items"] == []
 

@@ -84,3 +84,66 @@ def test_wave_by_genres(db):
     db.set_moods(rock[:2] + pop[:2], ["Грустное"])
     b = Wave(db, ["Грустное"], genres=["Rock"], rng=random.Random(4)).next_batch(20)   # mood within the genre
     assert {t["id"] for t in b} == set(rock[:2])
+
+
+def test_unfamiliar_leaves_out_liked_tracks(db):
+    from musicplayer.core import likes
+    ids = tracks(db, 8)
+    db.set_moods(ids, ["Грустное"])
+    likes.set_liked(db, "owner", "track", str(ids[0]), True)
+    likes.set_liked(db, "guest1", "track", str(ids[1]), True)
+    got = {t["id"] for t in Wave(db, ["Грустное"], "unfamiliar").next_batch(20)}
+    assert got == set(ids) - {ids[0]}                                        # the owner's like
+    got = {t["id"] for t in Wave(db, ["Грустное"], "unfamiliar", user="guest1").next_batch(20)}
+    assert got == set(ids) - {ids[1]}                                        # a guest's own like
+    assert ids[0] in {t["id"] for t in Wave(db, ["Грустное"], "mixed").next_batch(20)}
+
+
+def test_unfamiliar_leaves_out_liked_artists_and_albums(db):
+    from musicplayer.core import likes
+    fav = tracks(db, 3, "Fav")
+    duet = db.upsert_track({"path": "duet.mp3", "title": "duet", "artist": "Fav & Other"}, [])
+    alb = [db.upsert_track({"path": f"alb{i}.mp3", "title": f"alb{i}", "artist": "Someone", "album": "Best"}, [])
+           for i in range(2)]
+    rest = tracks(db, 4, "rest")
+    db.set_moods(fav + [duet] + alb + rest, ["Грустное"])
+    likes.set_liked(db, "owner", "artist", "fav", True)
+    likes.set_liked(db, "owner", "album", "Someone\x1fBest", True)
+    got = {t["id"] for t in Wave(db, ["Грустное"], "unfamiliar").next_batch(20)}
+    assert got == set(rest)
+
+
+def test_wave_by_language_and_voice(db):
+    ru = tracks(db, 4, "ru")
+    en = tracks(db, 4, "en")
+    db.set_language(ru, "ru")
+    db.set_language(en, "en")
+    db.set_vocal(ru[:2], "inst")
+    db.set_flags(en[:2], ["female"])
+    assert {t["id"] for t in Wave(db, langs=["ru"]).next_batch(20)} == set(ru)          # no moods: every ru track
+    assert {t["id"] for t in Wave(db, langs=["foreign"]).next_batch(20)} == set(en)
+    assert {t["id"] for t in Wave(db, voices=["inst"]).next_batch(20)} == set(ru[:2])
+    assert {t["id"] for t in Wave(db, voices=["female"], langs=["en"]).next_batch(20)} == set(en[:2])
+    assert {t["id"] for t in Wave(db, voices=["voc"]).next_batch(20)} == set(en[:2])     # a known voice = vocals
+    db.set_moods(ru + en, ["Грустное"])
+    assert {t["id"] for t in Wave(db, ["Грустное"], langs=["en"]).next_batch(20)} == set(en)
+    assert Wave(db, genres=["Jazz"]).next_batch(20) == []                                # nothing of it: no wave
+
+
+def test_radio_from_a_track_and_from_an_artist(db):
+    import numpy as np
+    rock = [db.upsert_track({"path": f"r{i}.mp3", "title": f"r{i}", "artist": f"r{i % 2}"}, ["Rock"]) for i in range(8)]
+    pop = [db.upsert_track({"path": f"p{i}.mp3", "title": f"p{i}", "artist": "p"}, ["Pop"]) for i in range(8)]
+    rng = np.random.default_rng(0)
+    base_r, base_p = rng.normal(size=16), rng.normal(size=16)
+    for t in rock:
+        db.set_embedding(t, "clap", (base_r + 0.1 * rng.normal(size=16)).astype(np.float32).tobytes())
+    for t in pop:
+        db.set_embedding(t, "clap", (base_p + 0.1 * rng.normal(size=16)).astype(np.float32).tobytes())
+    w = Wave(db, seed_track=rock[0], rng=random.Random(1))
+    b = w.next_batch(5)
+    assert len(b) == 5 and rock[0] not in {t["id"] for t in b}
+    near = sum(t["id"] in rock for s in range(30) for t in Wave(db, seed_track=rock[0], rng=random.Random(s)).next_batch(3))
+    assert near > 70                                                          # mostly the rock side
+    b = Wave(db, seed_artist="p", rng=random.Random(2)).next_batch(16)
+    assert set(pop) <= {t["id"] for t in b}                                   # the artist's own songs are in his radio

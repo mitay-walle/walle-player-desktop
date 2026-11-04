@@ -131,9 +131,10 @@ select.sel { height: 34px; border-radius: 17px; border: 1px solid var(--border);
 .wave-hero .play-btn { margin: 10px 0 14px; }
 .wave-hero h2 { margin: 0; font-size: 24px; }
 .wave-hero p { margin: 6px 0 0; color: var(--muted); font-size: 14px; max-width: 34em; }
-.wave-now { display: flex; align-items: center; gap: 12px; margin: 6px auto 0; padding: 10px 12px; max-width: 520px; width: 100%;
-  background: var(--surface); border-radius: var(--radius-lg); text-align: left; }
-.wave-now .row-text b { font-weight: 600; }
+.wave-state { margin-top: 6px; font-size: 14px; font-weight: 600; color: var(--muted); }
+.wave-state.live { color: var(--accent); }
+.icon-btn[data-rate="like"].on { color: var(--accent); opacity: 1; }
+.pill[data-rate="like"]:disabled { opacity: 1; }
 .seg { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); background: var(--surface); border-radius: 19px; padding: 3px; gap: 2px; }
 .seg button { min-width: 0; height: 34px; border-radius: 17px; padding: 0 8px; color: var(--muted); font-size: 13.5px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -212,6 +213,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
 .login-server { font-size: 13.5px; }
 .login-server.ok { color: var(--success) !important; }
 .login-server.bad { color: var(--danger) !important; }
+.login-share { font-size: 13.5px; color: var(--accent) !important; }
 .login-key { margin-top: 22px; width: 100%; max-width: 380px; color: var(--muted); }
 .login-key summary { cursor: pointer; font-size: 13.5px; }
 #join-box, #join-wait { width: 100%; max-width: 380px; display: flex; flex-direction: column; align-items: center; }
@@ -270,7 +272,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
   .pill:hover { filter: brightness(1.12); }
 
   /* player bar: track | buttons over the seek bar | queue, volume, expand */
-  .mini { grid-column: 1 / -1; grid-row: 2; display: grid; grid-template-columns: minmax(0, 1fr) minmax(380px, 680px) minmax(0, 1fr);
+  .mini { grid-column: 1 / -1; grid-row: 2; display: grid; grid-template-columns: minmax(170px, 1fr) minmax(300px, 680px) minmax(170px, 1fr);
     gap: 28px; height: var(--bar-h); padding: 0 20px; }
   .mini-progress { display: none; }
   .mini-left { display: flex; align-items: center; gap: 4px; min-width: 0; }
@@ -289,7 +291,9 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
   .mini-seek span { flex: none; width: 40px; text-align: center; }
   .mini-seek input { flex: 1; min-width: 0; height: 24px; }
   .mini-right.wide-only { display: flex !important; align-items: center; justify-content: flex-end; gap: 6px; }
-  .mini-vol { display: flex; align-items: center; gap: 8px; width: 150px; margin: 0 6px; }
+  .mini-vol { display: flex; align-items: center; gap: 8px; flex: 0 1 150px; min-width: 64px; margin: 0 6px; }
+  .mini-vol input { min-width: 0; flex: 1; }
+  .mini-right.wide-only { min-width: 0; }
   .vol-ico { color: var(--muted); }
 
   /* the whole height of a slider is clickable; the track thickens under the mouse */
@@ -337,6 +341,22 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
 
   .toast { bottom: calc(var(--bar-h) + 18px); }
   .upd { bottom: calc(var(--bar-h) + 18px); }
+}
+
+/* a portrait screen at PC width (a monitor turned upright, a tablet): the bar keeps the track readable, the full player
+   stacks the cover over the controls instead of two columns lost in the middle of the height */
+@media (min-width: 900px) and (orientation: portrait) {
+  .app { grid-template-columns: 200px minmax(0, 1fr); }
+  .view { padding: 4px 24px 28px; }
+  .top { padding: 18px 24px 8px; }
+  .mini { gap: 18px; padding: 0 16px; grid-template-columns: minmax(200px, 1fr) minmax(280px, 560px) minmax(150px, auto); }
+  .mini-vol { flex-basis: 110px; }
+  .full-inner { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; justify-items: center;
+    align-content: start; row-gap: 28px; padding: 16px 48px 40px; }
+  .full-head { justify-self: stretch; }
+  .full-cover { grid-column: 1; grid-row: 2; width: min(46vh, 72vw, 640px); margin-top: clamp(0px, 5vh, 80px); }
+  .full-side { grid-column: 1; grid-row: 3; width: min(100%, 680px); }
+  .controls, .full-foot { justify-content: center; }
 }
 
 /* without a connection: a quiet note above the saved music */

@@ -15,7 +15,10 @@ def data_dir() -> Path:
     if os.environ.get("MUSICPLAYER_HOME"):
         p = Path(os.environ["MUSICPLAYER_HOME"])
     else:
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home()))
+        if os.name == "nt":
+            base = Path(os.environ.get("LOCALAPPDATA", Path.home()))
+        else:                                        # Linux: ~/.local/share (XDG)
+            base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
         p, old = base / "WallePlayer", base / "MusicPlayer"
         if old.exists() and not p.exists():          # the app used to be called MusicPlayer: keep its data
             try:

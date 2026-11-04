@@ -638,11 +638,23 @@ def build_server(window) -> Any:
 
     @server.tool(description="Start 'My wave': endless listening by mood (several moods allowed, none = any labelled "
                              "mood). character: favorite | unfamiliar | mixed | weak (least certain guesses). A share of tracks are model GUESSES to "
-                             "be rated with wave_feedback (like confirms the mood, dislike rejects it).")
-    async def start_wave(moods: list[str] | None = None, character: str = "mixed") -> dict:
+                             "be rated with wave_feedback (like confirms the mood, dislike rejects it). langs: lyrics "
+                             "languages (ru, en, ja, ..., foreign = not Russian); voices: voc | inst | female | male | raspy. "
+                             "Radio instead of moods: seed_track (track id) or seed_artist (name) - the closest tracks.")
+    async def start_wave(moods: list[str] | None = None, character: str = "mixed", langs: list[str] | None = None,
+                         voices: list[str] | None = None, seed_track: int | None = None,
+                         seed_artist: str | None = None) -> dict:
         def go():
             window.set_page("wave")
-            n = pg("wave").start(moods or [], character)
+            w = pg("wave")
+            w.set_filters(langs or [], voices or [])
+            if seed_track is not None or seed_artist:
+                t = ctx.db.get_track(seed_track) if seed_track is not None else None
+                if seed_track is not None and t is None:
+                    return {"error": f"no track {seed_track}"}
+                n = w.start_radio(track=t, artist=None if t else seed_artist)
+            else:
+                n = w.start(moods or [], character)
             cur = player.current
             return {"queued": n, "now": brief(cur), "kind": cur.get("wave_kind") if cur else None}
         announce("start_wave")
@@ -745,6 +757,37 @@ def build_server(window) -> Any:
             window.statusBar().showMessage(f"Проверено мной: {len(done)} треков (исправлено {len(corrections or {})})", 6000)
             return {"reviewed": len(done), "corrected": len(corrections or {}),
                     "total_reviewed": db.conn.execute("SELECT COUNT(*) FROM reviewed").fetchone()[0]}
+        return await run(lambda: gui(go))
+
+    @server.tool(description="The library on a home server (the mini PC's walle-server): this app keeps a synced copy. "
+                             "action = status | connect (server: 'auto' = find it at home / via the VPS, or base URL(s); "
+                             "server_root: the music folder on the server, mapped to library_root here) | sync | "
+                             "disconnect | listeners (the server's listeners with their pairing links - they contain "
+                             "the key). While connected the server scans the music and deletes files; files missing "
+                             "here play from the server.")
+    async def library_server(action: str = "status", server: str = "auto", server_root: str = "") -> dict:
+        lib = ctx.library
+        if action == "listeners" and lib is not None:
+            from musicplayer.server.runner import RemoteServer
+            from musicplayer.ui.server_listeners import bases
+            state = await run(lambda: lib.request("/api/listeners", timeout=15))
+            return {"listeners": [{"id": u["id"], "name": u["name"], "owner": bool(u.get("owner")),
+                                   "can_label": bool(u.get("can_label")),
+                                   "links": [RemoteServer.pair_url(b, u) for _, b in bases(state)]}
+                                  for u in state.get("users") or []], "clients": state.get("clients") or []}
+
+        def go():
+            if lib is None:
+                return {"error": "no library client"}
+            if action == "connect":
+                if window.sharing.running:
+                    window.sharing.stop()            # only one computer serves the library (and holds the VPS port)
+                return lib.connect_to(server, server_root)
+            if action == "disconnect":
+                return lib.disconnect()
+            if action == "sync":
+                lib.sync_now()
+            return lib.status()
         return await run(lambda: gui(go))
 
     @server.tool(description="Library server for phones and other computers («Другие устройства»): action = status | on | "

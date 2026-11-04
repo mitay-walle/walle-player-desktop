@@ -245,3 +245,55 @@ def test_mini_player_volume_button_opens_a_vertical_slider(qtbot, app):
     pop.hide()
     win.leave_mini()
     assert win.player_bar.vol.value() == 35                                 # the full window's slider follows
+
+
+def test_wave_radio_language_filter_and_state_line(qtbot, app):
+    """Radio from a track / an artist; language chips narrow the wave; the line under the title says what plays;
+    a change of the choice keeps the playing song."""
+    ctx, win = app
+    rows = ctx.db.search(limit=100)
+    ctx.db.set_moods([t["id"] for t in rows], ["Грустное"])
+    ctx.db.set_language([rows[0]["id"], rows[1]["id"]], "ru")
+    wave = win.pages["wave"]
+    wave.reload()
+    assert ("lang", "ru") in wave.filter_buttons and "не запущена" in wave.state_label.text()
+    wave.filter_buttons[("lang", "ru")].click()
+    assert wave.start() == 2 and {t["id"] for t in ctx.player.queue.items} == {rows[0]["id"], rows[1]["id"]}
+    qtbot.waitUntil(lambda: "Играет" in wave.state_label.text() or "паузе" in wave.state_label.text(), timeout=5000)
+    assert "русский" in wave.state_label.text().lower()
+    cur = ctx.player.current["id"]
+    wave.set_character("unfamiliar")                              # the playing song goes on
+    assert ctx.player.current["id"] == cur
+    t = ctx.db.get_track(rows[2]["id"])
+    ctx.events.start_radio.emit({"track": t})
+    assert win.current_page_key() == "wave" and ctx.player.current["id"] == t["id"]
+    assert "радио по треку" in wave.state_label.text().lower()
+    assert len(ctx.player.queue.items) > 1 and all("wave_kind" in x for x in ctx.player.queue.items)
+    ctx.events.start_radio.emit({"artist": t["artist"]})
+    assert wave.seed == {"artist": t["artist"]} and wave.active
+
+
+def test_artists_page_tiles_show_photos_or_the_album_cover(qtbot, app, monkeypatch):
+    from musicplayer.core import artistimg
+    ctx, win = app
+    monkeypatch.setattr(artistimg, "fetch", lambda covers, name, timeout=10: None)    # no network in tests
+    page = win.pages["artists"]
+    page.refresh()
+    assert page.stack.currentWidget() is page.table and page.btn_view.text() == "▦ Плитка"
+    page.btn_view.setChecked(True)
+    assert ctx.settings.artists_tiles and page.stack.currentWidget() is page.grid
+    assert page.grid.count() == page.table.rowCount() > 0
+    page.grid.setCurrentRow(0)
+    assert page.current_artist() == page.grid.item(0).data(0x0100)
+    name = page.current_artist()
+    f = artistimg.folder(page.pictures.covers.folder) / f"{artistimg.key(name)}.jpg"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    from PySide6.QtGui import QColor, QImage
+    im = QImage(40, 20, QImage.Format.Format_RGB32)
+    im.fill(QColor("red"))
+    im.save(str(f), "JPG")
+    page.pictures.arrived.photo.emit(name)                                             # the photo came
+    pm = page.pictures.pixmap(name, None, 64)
+    assert (pm.width(), pm.height()) == (64, 64)                                       # square, cropped
+    page.btn_view.setChecked(False)
+    assert page.stack.currentWidget() is page.table

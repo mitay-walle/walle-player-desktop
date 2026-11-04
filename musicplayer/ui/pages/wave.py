@@ -13,9 +13,9 @@ from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget
 
 from musicplayer.ui.widgets import FlowLayout
-from musicplayer.core.wave import CHARACTERS, Wave
+from musicplayer.core.wave import CHARACTERS, Wave, wave_filters
 from musicplayer.ui.context import AppContext
-from musicplayer.ui.pages.library import GenreChips, MoodChips
+from musicplayer.ui.pages.library import SMALL_CHIP, GenreChips, MoodChips
 from musicplayer.ui.theme import TOKENS
 from musicplayer.ui.widgets import CoverCache
 
@@ -35,9 +35,17 @@ class WavePage(QWidget):
         self.zoom = 1.0
         self.rated_id: int | None = None          # track already rated: thumbs stay disabled until the next track
         self.selected: set[str] = set()
+        self.langs: set[str] = set()                 # lyrics languages / voices the wave is narrowed to
+        self.voices: set[str] = set()
+        self.seed: dict | None = None                # radio: {"track": id, "title": ...} or {"artist": name}
 
         self.heading = QLabel("Моя волна")
         self.heading.setStyleSheet("font-size:26px; font-weight:700;")
+        self.state_label = QLabel()                  # what the wave does: not started / playing which / paused
+        self.state_label.setWordWrap(True)
+        self.filter_box = QWidget()                  # language and voice chips (what this library has)
+        self.filter_flow = FlowLayout(self.filter_box, 4)
+        self.filter_buttons: dict[tuple[str, str], QPushButton] = {}
         self.chips = MoodChips()
         self.genre_chips = GenreChips()             # families; a chosen family opens its sub-genres
         self.genre_chips.set_selected(())
@@ -138,6 +146,7 @@ class WavePage(QWidget):
 
         col = QVBoxLayout()
         col.addWidget(self.heading)
+        col.addWidget(self.state_label)
         hint = QLabel("НАСТРОЕНИЕ — можно несколько; без выбора — любое из размеченных")
         hint.setStyleSheet("color:#92928F; font-size:10px; letter-spacing:1px;")
         hint.setWordWrap(True)
@@ -147,6 +156,10 @@ class WavePage(QWidget):
         ghint.setStyleSheet("color:#92928F; font-size:10px; letter-spacing:1px;")
         col.addWidget(ghint)
         col.addWidget(self.genre_chips)
+        vhint = QLabel("ЯЗЫК И ГОЛОС — без выбора любые")
+        vhint.setStyleSheet("color:#92928F; font-size:10px; letter-spacing:1px;")
+        col.addWidget(vhint)
+        col.addWidget(self.filter_box)
         col.addWidget(chars_holder)
         col.addStretch(1)
         col.addWidget(self.cover)
@@ -229,7 +242,40 @@ class WavePage(QWidget):
                 chip_menu(b, self.ctx, "mood", n)
         self.chips.set_counts(self.ctx.db.mood_example_counts())
         self._hide_chips()
+        self._fill_filters()
         self._render()
+
+    def _fill_filters(self) -> None:
+        """Language and voice chips: only what the library has, with counts."""
+        f = wave_filters(self.ctx.db)
+        want = [("lang", x["key"], x["name"], x["n"]) for x in f["wave_langs"]] + \
+               [("voice", x["key"], x["name"], x["n"]) for x in f["wave_voices"]]
+        if [w[:2] for w in want] == list(self.filter_buttons):
+            for kind, key, name, n in want:
+                self.filter_buttons[(kind, key)].setText(f"{name}  {n}")
+            return
+        for b in self.filter_buttons.values():
+            self.filter_flow.removeWidget(b)
+            b.deleteLater()
+        self.filter_buttons = {}
+        for kind, key, name, n in want:
+            b = QPushButton(f"{name}  {n}")
+            b.setCheckable(True)
+            b.setStyleSheet(SMALL_CHIP)
+            b.setChecked(key in (self.langs if kind == "lang" else self.voices))
+            b.clicked.connect(lambda on, kind=kind, key=key: self._filter_toggled(kind, key, on))
+            self.filter_flow.addWidget(b)
+            self.filter_buttons[(kind, key)] = b
+
+    def _filter_toggled(self, kind: str, key: str, on: bool) -> None:
+        target = self.langs if kind == "lang" else self.voices
+        (target.add if on else target.discard)(key)
+        self._retarget()
+
+    def set_filters(self, langs=(), voices=()) -> None:
+        self.langs, self.voices = set(langs), set(voices)
+        for (kind, key), b in self.filter_buttons.items():
+            b.setChecked(key in (self.langs if kind == "lang" else self.voices))
 
     def _hide_chips(self) -> None:
         """Genres and labels the chosen listener hid are not offered (and leave the current choice)."""
@@ -280,8 +326,11 @@ class WavePage(QWidget):
         self.selected = set(names)
         self._retarget()
 
-    def _retarget(self) -> None:
-        """Mood/character changed: later tracks follow the new choice, the current song keeps playing."""
+    def _retarget(self, keep_seed: bool = False) -> None:
+        """Mood/character changed: later tracks follow the new choice, the current song keeps playing (a radio
+        turns back into the wave of the chosen moods)."""
+        if not keep_seed:
+            self.seed = None
         w = self.window()
         if hasattr(w, "save_session"):
             w.save_session()                         # the choice is kept at once (a crash or kill does not lose it)
@@ -305,7 +354,48 @@ class WavePage(QWidget):
         return sorted(set(out))
 
     def _make_wave(self) -> Wave:
-        return Wave(self.ctx.db, sorted(self.selected), self.character, genres=self.wave_genres(), user=self.ctx.listener)
+        seed = self.seed or {}
+        return Wave(self.ctx.db, sorted(self.selected), self.character, genres=self.wave_genres(), user=self.ctx.listener,
+                    langs=sorted(self.langs), voices=sorted(self.voices), seed_track=seed.get("track"),
+                    seed_artist=seed.get("artist"))
+
+    def title_of_choice(self) -> str:
+        if self.seed and "track" in self.seed:
+            return f"радио по треку «{self.seed.get('title', '')}»"
+        if self.seed:
+            return f"радио: {self.seed['artist']}"
+        from musicplayer.core.langvocal import LANGS
+        from musicplayer.core.wave import VOICES
+        names = [*sorted(self.selected), *self.wave_genres(),
+                 *[("не на русском" if k == "foreign" else LANGS.get(k, k)) for k in sorted(self.langs)],
+                 *[VOICES.get(k, k).lower() for k in sorted(self.voices)]]
+        return " · ".join(names) or "все настроения"
+
+    def start_radio(self, track: dict | None = None, artist: str | None = None) -> int:
+        """A wave from one track (it plays first, or plays on when it is playing) or from one artist."""
+        self.seed = {"track": track["id"], "title": track["title"]} if track else {"artist": artist}
+        cur = self.ctx.player.current
+        if track and cur is not None and cur["id"] == track["id"] and self.ctx.player.state == "playing":
+            cur.setdefault("wave_kind", "known")
+            cur.setdefault("wave_moods", [])
+            self.active = True
+            self._retarget(keep_seed=True)
+            return 1
+        self.wave = self._make_wave()
+        batch = self.wave.next_batch(BATCH, exclude={track["id"]} if track else None)
+        if track:
+            batch = [{**track, "wave_kind": "known", "wave_moods": []}] + batch
+        if not batch:
+            self.toast.setText("Не нашлось похожих треков")
+            self._render()
+            return 0
+        self.active = True
+        self.toast.setText("")
+        self.ctx.player.set_shuffle("off")
+        self.ctx.player.set_repeat("off")
+        self.ctx.player.play_tracks(batch)
+        self._render()
+        return len(batch)
 
     # ---- playback -----------------------------------------------------
     def start(self, moods: list[str] | None = None, character: str | None = None) -> int:
@@ -341,7 +431,8 @@ class WavePage(QWidget):
             susp = {**susp, "items": [t["id"] for t in susp["items"]],
                     "meta": {str(t["id"]): [t["wave_kind"], t.get("wave_moods", []), t.get("wave_conf")] for t in susp["items"]}}
         return {"active": bool(self.active), "moods": sorted(self.selected), "character": self.character, "meta": meta,
-                "genres": sorted(self.genre_chips.selected()), "suspended": susp}
+                "genres": sorted(self.genre_chips.selected()), "suspended": susp, "langs": sorted(self.langs),
+                "voices": sorted(self.voices), "seed": self.seed}
 
     def restore_session(self, state: dict | None, tracks: list[dict]) -> list[dict]:
         """Restore the chosen moods / character; when the wave was playing, mark the restored queue as wave tracks."""
@@ -353,6 +444,8 @@ class WavePage(QWidget):
         for k, b in self.char_buttons.items():
             b.setChecked(k == self.character)
         self.genre_chips.set_selected(state.get("genres", []))
+        self.set_filters(state.get("langs", []), state.get("voices", []))
+        self.seed = state.get("seed") if state.get("active") else None
         susp = state.get("suspended")
         if susp:
             items = []
@@ -382,7 +475,8 @@ class WavePage(QWidget):
         if self.active and p.current is not None and "wave_kind" in p.current and q.items:
             self._last = {"items": [t for t in q.items if "wave_kind" in t], "current": p.current["id"],
                           "pos": float(p.deck.player.position()) / 1000 if hasattr(p, "deck") else 0.0,
-                          "moods": sorted(self.selected), "character": self.character, "genres": self.wave_genres()}
+                          "moods": sorted(self.selected), "character": self.character, "genres": self.wave_genres(),
+                          "langs": sorted(self.langs), "voices": sorted(self.voices), "seed": self.seed}
 
     def _suspend(self) -> None:
         if getattr(self, "_last", None):
@@ -391,8 +485,11 @@ class WavePage(QWidget):
     def resume(self) -> bool:
         """Continue the interrupted wave at its track and second (same moods and character only)."""
         s = getattr(self, "suspended", None)
-        if not s or s["moods"] != sorted(self.selected) or s["character"] != self.character                 or s.get("genres", []) != self.wave_genres():
+        if not s or s["moods"] != sorted(self.selected) or s["character"] != self.character \
+                or s.get("genres", []) != self.wave_genres() or s.get("langs", []) != sorted(self.langs) \
+                or s.get("voices", []) != sorted(self.voices):
             return False
+        self.seed = s.get("seed")
         items = s["items"]
         idx = next((i for i, t in enumerate(items) if t["id"] == s["current"]), None)
         if idx is None or not hasattr(self.ctx.player, "cue"):
@@ -604,4 +701,22 @@ class WavePage(QWidget):
         self.chips.show_state([{"moods": sorted(self.selected)}])
         for b in self.chips.buttons.values():
             b.setEnabled(True)
+        self._render_state(cur)
         self._render_buttons()
+
+    def _render_state(self, cur: dict | None) -> None:
+        """One line under the title: is the wave on, what does it play, how much is queued."""
+        p = self.ctx.player
+        what = self.title_of_choice()
+        if cur is None:
+            text, color = f"Волна не запущена — ▶ запустит: {what}", TOKENS["text_muted"]
+        else:
+            q = p.queue
+            left = len(q.order) - q.pos - 1 if q.pos >= 0 else 0
+            what = what[0].upper() + what[1:]
+            if p.state == "playing":
+                text, color = f"Играет: {what} · дальше в очереди {left}", TOKENS["accent"]
+            else:
+                text, color = f"На паузе: {what}", TOKENS["text_muted"]
+        self.state_label.setText(text)
+        self.state_label.setStyleSheet(f"color:{color}; font-size:13px; font-weight:600;")

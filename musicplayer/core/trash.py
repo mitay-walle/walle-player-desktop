@@ -25,6 +25,33 @@ def to_recycle_bin(path: str) -> bool:
     return ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op)) == 0 and not op.fAnyOperationsAborted
 
 
+def to_trash_folder(path: str, root: str | None) -> bool:
+    """Linux (a home server): move the file into ``.walle-trash`` next to the music folder ``root``, keeping its
+    folders, so it can be put back; outside ``root`` (or without it) into ``.walle-trash`` beside the file."""
+    import shutil
+    from pathlib import Path
+    p = Path(path)
+    if not p.exists():
+        return True
+    try:
+        if root and p.is_relative_to(root):
+            dest = Path(root).parent / ".walle-trash" / p.relative_to(root)
+        else:
+            dest = p.parent / ".walle-trash" / p.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            dest = dest.with_name(f"{dest.stem}.{int(__import__('time').time())}{dest.suffix}")
+        shutil.move(str(p), str(dest))
+        return True
+    except OSError:
+        return False
+
+
+def remove_file(path: str, root: str | None = None) -> bool:
+    """The Recycle Bin on Windows, the trash folder elsewhere."""
+    return to_recycle_bin(path) if os.name == "nt" else to_trash_folder(path, root)
+
+
 def trash_tracks(db, tracks: list[dict], remover=None) -> dict:
     """Recycle the files of ``tracks`` and mark them missing in the catalogue.  Returns {'deleted': n, 'failed': [paths]}."""
     remover = remover or to_recycle_bin

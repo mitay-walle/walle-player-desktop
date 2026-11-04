@@ -114,7 +114,23 @@ def ensure_key(home: Path) -> tuple[Path, str]:
             raise RuntimeError("нет ssh-keygen (OpenSSH-клиент Windows)")
         subprocess.run([keygen, "-q", "-t", "ed25519", "-N", "", "-C", "walle-player", "-f", str(key)], check=True,
                        capture_output=True, timeout=30, creationflags=NO_WINDOW)
+    protect_key(key)
     return key, Path(str(key) + ".pub").read_text(encoding="utf-8").strip()
+
+
+def protect_key(key: Path) -> None:
+    """The private key readable by its owner only: Windows OpenSSH refuses a key others can read («UNPROTECTED PRIVATE
+    KEY FILE»), and a data folder copied to another computer (or restored) gives the key inherited permissions.
+    Linux / macOS: mode 600 (a key copied from Windows arrives readable by everyone, and ssh refuses it too)."""
+    if not key.exists():
+        return
+    if os.name != "nt":
+        key.chmod(0o600)
+        return
+    user = os.environ.get("USERNAME", "")
+    if user:
+        subprocess.run(["icacls", str(key), "/inheritance:r", "/grant:r", f"{user}:F"], capture_output=True,
+                       timeout=30, creationflags=NO_WINDOW)
 
 
 class Relay:

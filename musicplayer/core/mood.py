@@ -153,7 +153,9 @@ def _analyze_one(args: tuple[int, str, float]) -> tuple[int, dict | None, str]:
     tid, path, seconds = args
     _enable_fault_log()
     try:
-        return tid, extract_descriptors(path, max_seconds=seconds, timbral=False), ""
+        from .remotefile import local_copy
+        with local_copy(tid, path) as p:                 # not on this computer: fetched from the library server
+            return tid, extract_descriptors(p, max_seconds=seconds, timbral=False), ""
     except Exception as e:  # unreadable file: report, keep going
         return tid, None, str(e)
 

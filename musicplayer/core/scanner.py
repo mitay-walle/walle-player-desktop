@@ -136,6 +136,7 @@ def scan(db: Database, root: str | Path, cover_dir: str | Path,
     db.conn.execute("BEGIN")
     t_commit = t0 = t_prog = time.monotonic()
     try:
+        moved = relocate_moved(db, known, files)
         for i, p in enumerate(files, 1):
             if progress and (time.monotonic() - t_prog > 0.2 or i == total):
                 t_prog = time.monotonic()
@@ -173,8 +174,47 @@ def scan(db: Database, root: str | Path, cover_dir: str | Path,
             raise RuntimeError("В папке не найдено ни одного аудиофайла, а в каталоге они есть: "
                                "диск недоступен? Каталог не изменён.")
         db.mark_missing(gone)
+        if added or updated or gone:
+            db.rebuild_artist_links()                    # a new artist can turn «A, B» of other tracks into a collaboration
         db.conn.execute("COMMIT")
     except BaseException:
         db.conn.execute("ROLLBACK")
         raise
-    return {"added": added, "updated": updated, "missing": len(gone), "errors": errors, "total": len(seen)}
+    return {"added": added, "updated": updated, "missing": len(gone), "errors": errors, "total": len(seen),
+            "moved": moved}
+
+
+def _tail(path: str | Path) -> tuple[str, ...]:
+    """artist / album / file of a path - also of a Windows path seen on Linux (the library moved from D:\\ to /mnt)."""
+    from pathlib import PureWindowsPath
+    s = str(path)
+    p = PureWindowsPath(s) if ("\\" in s or s[1:2] == ":") else Path(s)
+    return tuple(x.casefold() for x in p.parts[-3:])
+
+
+def relocate_moved(db: Database, known: dict[str, tuple[float, int]], files: list[Path]) -> int:
+    """Files that moved (the disk got another letter on another computer, the library folder was moved): a catalogued
+    track that no longer exists at its path and a new file with the same artist/album/file name and size are the same
+    track - its path is updated, so labels, likes and plays stay with it.  ``known`` is updated in place."""
+    new = [p for p in files if str(p) not in known]
+    if not new:
+        return 0
+    lost: dict[tuple, list[str]] = {}
+    for path in known:
+        if not os.path.exists(path):
+            lost.setdefault(_tail(path), []).append(path)
+    n = 0
+    for p in new:
+        cands = lost.get(_tail(p))
+        if not cands:
+            continue
+        size = p.stat().st_size
+        same = [c for c in cands if known[c][1] == size] or (cands if len(cands) == 1 else [])
+        if len(same) != 1:
+            continue
+        old = same[0]
+        cands.remove(old)
+        db.conn.execute("UPDATE tracks SET path=?, missing=0 WHERE path=?", (str(p), old))
+        known[str(p)] = known.pop(old)
+        n += 1
+    return n

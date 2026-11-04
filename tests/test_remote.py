@@ -647,3 +647,18 @@ def test_access_requests_from_home_network_only(lib):
     assert access.from_home("127.0.0.1")                                               # this computer
     access.join_internet = True                                                        # the owner allowed it
     assert phone_out.post("/api/join", json={"name": "Петя"}).status_code == 200
+
+def test_share_link_goes_to_the_app_on_android(lib):
+    c = TestClient(build_app(lib, Access(USERS), {"name": "test", "library": "lib1"}), follow_redirects=False)
+    android = {"user-agent": "Mozilla/5.0 (Linux; Android 16) Chrome/140 Mobile"}
+    r = c.get("/open/album/A%2FB/Best%20Of", headers=android)          # no key needed: the app has its own
+    assert r.status_code == 302
+    to = r.headers["location"]
+    assert to.startswith("intent://open?server=http%3A%2F%2Ftestserver&route=album%2FA%252FB%2FBest%2520Of&library=lib1#")
+    assert "scheme=walleplayer;package=com.mitaywalle.player;" in to
+    assert "S.browser_fallback_url=http%3A%2F%2Ftestserver%2F%3Fnoapp%3D1%23%2Falbum%2FA%252FB%2FBest%2520Of;end" in to
+    assert c.get("/open/track/5").headers["location"] == "/#/track/5"                    # not Android: the web page
+    assert c.get("/open/track/5?noapp=1", headers=android).headers["location"] == "/#/track/5"
+    assert c.get("/open/evil/x", headers=android).headers["location"] == "/"
+    links = c.get("/.well-known/assetlinks.json").json()
+    assert links[0]["target"]["package_name"] == "com.mitaywalle.player"

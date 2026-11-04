@@ -128,6 +128,9 @@ class PlayerBar(QWidget):
         make_icon_button(self.btn_repeat, "repeat", TOKENS["text_muted"], 22)
         self.btn_hide = QPushButton()
         make_icon_button(self.btn_hide, "hide", TOKENS["text_muted"], 22, "Не показывать: этот трек, альбом или исполнителя")
+        self.btn_link = QPushButton()
+        make_icon_button(self.btn_link, "share", TOKENS["text_muted"], 22,
+                         "Поделиться: ссылка на трек, альбом или исполнителя")
         self.btn_tags = QPushButton()
         make_icon_button(self.btn_tags, "tag", TOKENS["text_muted"], 22)
         self.btn_tags.setToolTip("Разметить играющий трек: настроения и тип записи (Ctrl+L)")
@@ -157,7 +160,8 @@ class PlayerBar(QWidget):
         lay.addLayout(info, 2)
         lay.addWidget(self.btn_fav)
         lay.addWidget(self.btn_hide)
-        lay.addWidget(self.strip)                     # small equaliser next to the title, not a full-width band
+        lay.addWidget(self.btn_link)
+        lay.addWidget(self.strip)                    # small equaliser next to the title, not a full-width band
         lay.addWidget(self.btn_shuffle)
         for b in (self.btn_prev, self.btn_play, self.btn_next):
             lay.addWidget(b)
@@ -186,6 +190,8 @@ class PlayerBar(QWidget):
         self.btn_fav.clicked.connect(self.toggle_favorite)
         from musicplayer.ui.hideactions import current_track_menu
         self.btn_hide.clicked.connect(lambda: current_track_menu(self.ctx, self.btn_hide))
+        from musicplayer.ui.libraryclient import share_menu
+        self.btn_link.clicked.connect(lambda: share_menu(self.ctx, self.btn_link, self.ctx.player.current))
         ctx.events.favorites_changed.connect(lambda: self._show_fav(self.ctx.player.current))
         for w in (self.cover, self.title):           # click on the cover / title: show the track in the library
             w.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -318,6 +324,7 @@ class PlayerBar(QWidget):
         self.btn_fav.setToolTip(("Убрать из избранного (F)" if on else "В избранное (F)") + who)
         self.btn_fav.setEnabled(t is not None)
         self.btn_hide.setEnabled(t is not None)
+        self.btn_link.setEnabled(t is not None)
 
     def on_track(self, t: dict | None) -> None:
         self._show_fav(t)
@@ -357,7 +364,7 @@ class MainWindow(QMainWindow):
         self.covers = CoverCache(ctx.covers)
         self.pages: dict[str, QWidget] = {
             "library": LibraryPage(ctx, self.covers), "albums": AlbumsPage(ctx, self.covers),
-            "queue": QueuePage(ctx), "history": HistoryPage(ctx), "favorites": FavoritesPage(ctx), "artists": ArtistsPage(ctx), "playlists": PlaylistsPage(ctx, self.covers),
+            "queue": QueuePage(ctx), "history": HistoryPage(ctx), "favorites": FavoritesPage(ctx), "artists": ArtistsPage(ctx, self.covers), "playlists": PlaylistsPage(ctx, self.covers),
             "moods": MoodsPage(ctx), "stats": StatsPage(ctx),
             "colormusic": ColorMusicPage(ctx, self.covers), "wave": WavePage(ctx, self.covers),
         }
@@ -425,6 +432,18 @@ class MainWindow(QMainWindow):
         self.btn_marks.setToolTip("Треки и альбомы, которые слушатели пометили на удаление: удалить или оставить")
         self.btn_marks.hide()
         sv.addWidget(self.btn_marks)
+        self.btn_quality = QPushButton()                 # the nightly sound check found bad files (shown when any)
+        self.btn_quality.setIcon(icon("bars", TOKENS["warning"], 20))
+        self.btn_quality.setIconSize(QSize(20, 20))
+        self.btn_quality.setToolTip("Битые, обрезанные, пережатые и плохие по звуку файлы: удалить или перекачать")
+        self.btn_quality.hide()
+        sv.addWidget(self.btn_quality)
+        self.btn_sync = QPushButton("  Сервер")           # the library lives on a home server: sync state and control
+        self.btn_sync.setIcon(icon("refresh", TOKENS["text_muted"], 20))
+        self.btn_sync.setIconSize(QSize(20, 20))
+        self.btn_sync.hide()
+        self._sync_text = "  Сервер"
+        sv.addWidget(self.btn_sync)
         sv.addWidget(self.btn_share)
         sv.addWidget(self.btn_folder)
         sv.addWidget(self.btn_rescan)
@@ -481,9 +500,22 @@ class MainWindow(QMainWindow):
         self.btn_rescan.clicked.connect(lambda: self.start_scan())
         from musicplayer.ui.share_dialog import RemoteSharing
         self.sharing = RemoteSharing(ctx)
+        from musicplayer.ui import player as player_mod
+        from musicplayer.ui.libraryclient import LibraryClient, media_source
+        ctx.library = LibraryClient(ctx)                    # the library may live on a home server (synced copy here)
+        player_mod.source_hook = lambda t: media_source(ctx.library, t)
+        ctx.library.synced.connect(self._library_synced)
+        ctx.library.changed.connect(self._show_sync_state)
+        self.btn_sync.clicked.connect(self.sync_menu)
+        ctx.library.start()
+        self._show_sync_state()
         self.btn_share.clicked.connect(self.open_share)
         self.listener_box.currentIndexChanged.connect(self._listener_chosen)
         self.btn_marks.clicked.connect(self.open_delete_marks)
+        self.btn_quality.clicked.connect(self.open_quality)
+        self._night_timer = QTimer(self, interval=10 * 60 * 1000)   # the sound check runs at night by itself
+        self._night_timer.timeout.connect(self._night_tick)
+        self._night_timer.start()
         self._marks_timer = QTimer(self, interval=15000)  # phones mark through the server: look now and then
         self._marks_timer.timeout.connect(self._update_marks)
         self._marks_timer.start()
@@ -494,8 +526,8 @@ class MainWindow(QMainWindow):
         ctx.events.favorites_changed.connect(lambda: self.player_bar._show_fav(ctx.player.current))
         self._fill_listeners()
         self.sharing.join_requested.connect(self._join_request)
-        if self.sharing.cfg.enabled:                         # the library was open for other devices at exit
-            QTimer.singleShot(500, self._autostart_sharing)
+        if self.sharing.cfg.enabled and not ctx.library.enabled:   # open for other devices at exit (not when the
+            QTimer.singleShot(500, self._autostart_sharing)            # server does that)
         ctx.events.request_scan.connect(self.browse)
         ctx.events.request_autotag.connect(lambda: self.start_autotag() if not ctx.jobs.busy else None)
         self.btn_cancel.clicked.connect(ctx.jobs.cancel)
@@ -503,6 +535,7 @@ class MainWindow(QMainWindow):
         ctx.jobs.progress.connect(self._job_progress)
         ctx.jobs.finished.connect(self._job_finished)
         ctx.events.navigate.connect(self.set_page)
+        ctx.events.start_radio.connect(self.start_radio)
         ctx.player.error.connect(lambda m: self.statusBar().showMessage(f"Ошибка воспроизведения: {m}", 6000))
         self._hotkeys()
         QApplication.instance().installEventFilter(self)
@@ -545,6 +578,8 @@ class MainWindow(QMainWindow):
         self.btn_folder.setText("" if compact else "  Папка с музыкой…")
         self.btn_rescan.setText("" if compact else "  Обновить библиотеку")
         self.btn_share.setText("" if compact else "  Другие устройства")
+        self._compact_side = compact
+        self.btn_sync.setText("" if compact else self._sync_text)
         css = "padding:9px 0; text-align:center;" if compact else "padding:9px 14px; text-align:left;"
         self.side.setStyleSheet(self._side_base + f"QFrame#sidebar QPushButton {{ {css} }}")
 
@@ -560,6 +595,81 @@ class MainWindow(QMainWindow):
             QShortcut(QKeySequence(seq), self, activated=fn)
 
     # ---- session: queue, current track and position survive a restart --------------------------
+    def _show_sync_state(self) -> None:
+        """The «Сервер» button: when the copy was last synced, pause, no connection, files still to fetch."""
+        import time as _t
+        lib = self.ctx.library
+        on = lib is not None and lib.enabled
+        self.btn_sync.setVisible(on)
+        if not on:
+            return
+        st = lib.status()
+        m = st["mirror"]
+        if lib.paused:
+            state = "пауза"
+        elif st["busy"]:
+            state = "обмен…"
+        elif lib.error:
+            state = "нет связи"
+        else:
+            state = _t.strftime("%H:%M", _t.localtime(st["last_sync"])) if st["last_sync"] else "…"
+        todo = m.get("missing") or 0
+        self._sync_text = f"  Сервер: {state}" + (f" · докачать {todo}" if todo and st["mirror_on"] else "")
+        self.btn_sync.setText("" if getattr(self, "_compact_side", False) else self._sync_text)
+        limit = st["limit_kbps"]
+        lines = [f"Библиотека на сервере: {st['server'] or 'ищу…'}",
+                 "Синхронизация на паузе: сеть не трогаю" if lib.paused else
+                 f"Последняя синхронизация: {_t.strftime('%H:%M:%S', _t.localtime(st['last_sync'])) if st['last_sync'] else '—'}",
+                 f"Копия музыки здесь: {'включена' if st['mirror_on'] else 'выключена'}"
+                 + (f", докачать {todo}" if todo else "") + (f", скачано {m['copied']}" if m.get("copied") else ""),
+                 f"Скорость загрузки с сервера: {'без ограничения' if not limit else f'{limit / 1024:g} МБ/с'}"]
+        if lib.error:
+            lines.append(f"Ошибка: {lib.error}")
+        if m.get("error"):
+            lines.append(f"Не скачалось: {m['error']}")
+        self.btn_sync.setToolTip("\n".join(lines) + "\n\nНажмите: синхронизировать, пауза, скорость")
+
+    def sync_menu(self) -> None:
+        from PySide6.QtGui import QActionGroup
+        from PySide6.QtWidgets import QMenu
+
+        from musicplayer.ui import hideactions
+        lib = self.ctx.library
+        if lib is None or not lib.enabled:
+            return
+        menu = QMenu(self)
+        a = menu.addAction("Синхронизировать сейчас", lib.sync_now)
+        a.setEnabled(not lib.paused)
+        p = menu.addAction("Пауза: не трогать сеть")
+        p.setCheckable(True)
+        p.setChecked(lib.paused)
+        p.setToolTip("Остановить обмен и все загрузки с сервера (начатая загрузка обрывается сразу)")
+        p.toggled.connect(lib.set_paused)
+        mi = menu.addAction("Держать полную копию музыки здесь")
+        mi.setCheckable(True)
+        mi.setChecked(self.ctx.settings.sync_mirror)
+        mi.toggled.connect(lib.set_mirror)
+        sub = menu.addMenu("Скорость загрузки с сервера")
+        group = QActionGroup(sub)
+        for kbps, label in ((512, "0,5 МБ/с"), (1024, "1 МБ/с"), (2048, "2 МБ/с"), (5120, "5 МБ/с"),
+                            (0, "Без ограничения")):
+            act = sub.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(self.ctx.settings.sync_limit_kbps == kbps)
+            act.triggered.connect(lambda _c=False, k=kbps: lib.set_limit(k))
+            group.addAction(act)
+        hideactions.show_menu(menu, self.btn_sync.mapToGlobal(self.btn_sync.rect().bottomLeft()))
+
+    def _library_synced(self, res: dict) -> None:
+        self._show_sync_state()
+        if res.get("error"):
+            self.statusBar().showMessage(f"Сервер библиотеки: {res['error']}", 8000)
+        elif res.get("pulled"):
+            self.statusBar().showMessage(f"С сервера пришло изменений: {res['pulled']}"
+                                         + (f", новых треков: {res['new']}" if res.get("new") else ""), 4000)
+        if res.get("new"):                     # the server found new music: analyse and tag it here (strong PC)
+            QTimer.singleShot(0, self.maybe_autotag)
+
     def offer_undo(self, text: str, undo) -> None:
         """A message in the status bar with «Отменить» for a few seconds (after «Не показывать» and the like)."""
         from PySide6.QtWidgets import QPushButton
@@ -674,6 +784,10 @@ class MainWindow(QMainWindow):
         return False
 
     # ---- navigation ---------------------------------------------------
+    def start_radio(self, seed: dict) -> None:
+        self.set_page("wave")
+        self.pages["wave"].start_radio(track=seed.get("track"), artist=seed.get("artist"))
+
     def set_page(self, key: str) -> None:
         keys = [k for k, _ in PAGES]
         if key not in keys:
@@ -697,8 +811,13 @@ class MainWindow(QMainWindow):
             self.set_page("library")
             self.pages["library"].set_filters(text=text)
 
-    def start_scan(self, root: str | None = None, full: bool = False) -> JobInfo:
+    def start_scan(self, root: str | None = None, full: bool = False) -> JobInfo | None:
         ctx = self.ctx
+        if ctx.library is not None and ctx.library.enabled:     # the server scans its music folder itself
+            self.statusBar().showMessage("Библиотека на сервере: новые файлы находит сервер, сюда они приходят "
+                                         "синхронизацией", 8000)
+            ctx.library.sync_now()
+            return None
         root = root or ctx.settings.library_root
         ctx.settings.library_root = root
         self.btn_folder.setToolTip(f"Сейчас: {root}\nВыбрать папку и просканировать")
@@ -773,6 +892,8 @@ class MainWindow(QMainWindow):
         elif job.kind == "autotag":
             self.ctx.events.tracks_changed.emit([])
             self.ctx.events.library_changed.emit()
+        elif job.kind == "quality":
+            self._update_marks()
 
     def _fill_listeners(self) -> None:
         """The listener chooser: shown when the library has guests; a removed guest falls back to the owner."""
@@ -800,6 +921,11 @@ class MainWindow(QMainWindow):
         n = deletemarks.count(self.ctx.db)
         self.btn_marks.setVisible(n > 0)
         self.btn_marks.setText("" if getattr(self, "_side_compact", False) else f"  На удаление ({n})")
+        from musicplayer.core import quality
+        s = quality.summary(self.ctx.db)
+        bad = sum(s[k] for k in quality.BAD)
+        self.btn_quality.setVisible(bad > 0)
+        self.btn_quality.setText("" if getattr(self, "_side_compact", False) else f"  Плохой звук ({bad})")
 
     def open_delete_marks(self) -> None:
         from musicplayer.ui.deletemarks_dialog import DeleteMarksDialog
@@ -807,7 +933,38 @@ class MainWindow(QMainWindow):
         DeleteMarksDialog(self.ctx, names, self).exec()
         self._update_marks()
 
+    def open_quality(self) -> None:
+        from musicplayer.ui.quality_dialog import QualityDialog
+        QualityDialog(self.ctx, self).exec()
+        self._update_marks()
+
+    def start_quality_check(self, until: float | None = None) -> JobInfo | None:
+        """The sound check of the tracks not looked at yet, in a child process (until ``until``, else to the end)."""
+        ctx = self.ctx
+        if ctx.jobs.busy:
+            self.statusBar().showMessage(f"Занято: {ctx.jobs.current.title}", 5000)
+            return None
+        return ctx.jobs.run_process("quality", "Проверка качества звука", "musicplayer.core.procjobs:quality",
+                                    {"db_path": str(ctx.db_path), "until": until})
+
+    def _night_tick(self) -> None:
+        """2:00-7:00, the app open and nothing else running: check the new tracks (on until 7:00)."""
+        import datetime as dt
+        from musicplayer.core import quality
+        now = dt.datetime.now()
+        if not self.ctx.settings.night_check or not 2 <= now.hour < 7 or self.ctx.jobs.busy or self.ctx.closed:
+            return
+        if self.ctx.settings.sync_paused and self.ctx.library.enabled:
+            return                                       # the user keeps the network for something else
+        if not quality.pending(self.ctx.db, 1):
+            return
+        self.start_quality_check(until=now.replace(hour=7, minute=0, second=0).timestamp())
+
     def open_share(self) -> None:
+        if self.ctx.library.enabled:                    # the library lives on a home server: its listeners
+            from musicplayer.ui.server_listeners import ServerListenersDialog
+            ServerListenersDialog(self.ctx, self.sharing, self).exec()
+            return
         from musicplayer.ui.share_dialog import ShareDialog
         ShareDialog(self.sharing, self).exec()
 

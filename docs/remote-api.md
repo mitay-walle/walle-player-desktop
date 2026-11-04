@@ -82,6 +82,10 @@ IP компьютера в домашней сети может сменитьс
 | `GET /api/app/{file}` | APK мобильного приложения из `mobile` (только самый новый) |
 | `GET /api/me` | `{"name", "owner": bool, "can_label": bool}` — кто вошёл |
 | `POST /api/me` `{"name"}` | переименовать себя (до 40 символов) → как `GET /api/me` |
+| `GET /api/listeners` (только владелец) | `{"users": [{"id", "name", "owner", "can_label", "token", "created"}], "addresses": как в `/api/info`, "clients": [{"user", "device", "address", "track", "last"}]}` — слушатели сервера с ключами: ссылка для QR — `<base>/?k=<token>`; остальным `403` |
+| `POST /api/listeners` `{"name", "can_label"}` (владелец) | новый слушатель со своим ключом → как `GET /api/listeners` |
+| `POST /api/listeners/{id}` (владелец) | `{"name"?, "can_label"?, "new_key": true?, "remove": true?}` → как `GET /api/listeners`; ключ и права владельца так не меняются (`400`), нет такого — `404` |
+| `POST /api/listeners/{id}/likes` (владелец) | `{"items": [{"artist", "title", "added"?} \| {"path"}], "dry_run": bool}` → `{"items", "matched", "unmatched": ["Исполнитель — Название"], "added"?}` — «Импорт лайков» слушателю: сопоставление с каталогом сервера; без `dry_run` найденные становятся его лайками (у владельца — «Избранное») |
 | `POST /api/login` `{"key"}` | ставит cookie; `401` если неверный |
 | `POST /api/logout` | убирает cookie (веб) |
 | `GET /api/info` | `{"name", "version", "api", "tracks", "user": /api/me, "addresses": {"lan": [base…], "internet": [base…]}, "moods": [{"name", "n", "group", "color", "glyph"}], "mood_groups": [...], "characters": [{"key", "name"}], "genres": [{"name", "n"}], "labels": {"genre_tree": [{"name", "color", "subs"}], "eras", "flags": [{"key", "name"}], "langs", "vocals"}, "playlists"}` |
@@ -89,7 +93,8 @@ IP компьютера в домашней сети может сменитьс
 | `POST /api/tracks/lookup` `{"ids": [...]}` | `{"items": [Track]}` — свежие данные многих треков сразу (до 2000), неизвестные пропускаются; обновить метки скачанных треков без перекачки аудио |
 | `GET /api/tracks/{id}` | Track |
 | `GET /api/tracks/{id}/probs` | `{"probs": {"Весёлое": 0.72, ...}}` — вероятность каждого настроения по текущей модели (пусто, если модели или анализа нет); для заливки чипов при разметке |
-| `GET /api/artists` | `{"items": [{"name", "n", "liked"}]}` |
+| `GET /api/artists` | `{"items": [{"name", "n", "plays", "liked", "image"}]}` — `n` и `plays` (прослушивания этого слушателя) считают только видимые ему треки; `image` — путь картинки исполнителя |
+| `GET /api/artist_image?name=<имя>&size=N` | картинка исполнителя (JPEG, `size` как у `/api/cover`): фото из Deezer (запрашивается в фоне при первом показе), пока его нет — обложка самого большого альбома (`max-age=3600`), без неё 404 |
 | `GET /api/albums` | `{"items": [{"name", "artist", "year", "n", "cover", "liked"}]}` — треки альбома: `/api/tracks?album=…&artist=…&order=album` |
 | `GET /api/genres` | `{"items": [{"name", "n"}]}` |
 |  | **Жанры** (с 0.4.13) — один словарь (`musicplayer/core/genres.py`): канонические английские имена (с 0.4.33). С 0.4.36 жанры с кириллицей в `/labels` и `/genres` не принимаются: 400 `{"error": "Жанры пишутся по-английски (латиницей): …"}` — клиент показывает этот текст; в фильтре `genre` и поиске русские названия по-прежнему понимаются; склеенные теги (`Post-Hardcore | Pop-Punk`, `Ambient, Psybient`) разбиваются; поджанр всегда приходит вместе с семейством (`["Punk", "Pop Punk"]`), дерево и цвета семейств — `labels.genre_tree`. Клиент показывает имена как есть и не держит своих списков. На запись и в фильтр `genre`/волну можно присылать любое написание (`рок`, `pop-punk`, `рэп`) — сервер приведёт к словарю. С 0.4.26 жанр можно прислать путём `"Семейство/Поджанр"` (`"Punk/Skate Punk"`) (в `genres` для `/labels` и `/genres`): незнакомый поджанр сервер добавит в дерево под это семейство (незнакомое имя без «/» — новым семейством), он появится в `labels.genre_tree` |
@@ -100,12 +105,12 @@ IP компьютера в домашней сети может сменитьс
 | `POST /api/favorites` | `{"kind": "track", "id": 70, "on": true}` · `{"kind": "album", "artist", "album", "on"}` · `{"kind": "artist", "name", "on"}` → `{"kind", "key", "liked"}` |
 | `GET /api/hidden` | `{"items": [{"kind", "key", "title", "sub", "added"}]}` — что этот слушатель скрыл («Не показывать»), новые первыми; экран «Скрытое» |
 | `POST /api/hidden` | `{"kind": "track" \| "album" \| "artist" \| "genre" \| "mood", "key", "on": true}` → `{"ok", "kind", "key", "on"}`; `on: false` — «Вернуть». Ключи: трек — id строкой, альбом — `"исполнитель\u001fальбом"` (исполнитель альбома, иначе исполнитель), остальное — имя |
-| `GET /api/delete-marks` | `{"items": [{"kind": "track" \| "album", "key"}]}` — что ЭТОТ слушатель пометил на удаление (новые первыми) |
-| `POST /api/delete-marks` | `{"kind": "track" \| "album", "key", "on": true}` → `{"ok": true, "kind", "key", "on"}`; `on: false` — снять свою пометку. `400` — неверный kind или пустой key, `404` — такого трека / альбома нет. Ключи как у «Не показывать»: трек — id строкой, альбом — `"исполнитель\u001fальбом"` |
+| `GET /api/delete-marks` | `{"items": [{"kind": "track" \| "album" \| "artist", "key"}]}` — что ЭТОТ слушатель пометил на удаление (новые первыми) |
+| `POST /api/delete-marks` | `{"kind": "track" \| "album" \| "artist", "key", "on": true}` → `{"ok": true, "kind", "key", "on"}`; `on: false` — снять свою пометку. `400` — неверный kind или пустой key, `404` — такого трека / альбома нет. Ключи как у «Не показывать»: трек — id строкой, альбом — `"исполнитель\u001fальбом"` |
 | `GET /api/stream/{id}` | сам файл (`audio/mpeg`, …) с поддержкой `Range` (206) для перемотки; `410` если файла нет на диске |
 | `GET /api/cover/{key}[?size=160]` | JPEG, кэшируется надолго (ключ не меняется); `size` — уменьшенная копия (96/160/320/512, ближайшая не меньше) для списков |
 | `POST /api/plays` | `{"id", "listened": сек, "at"?: unix, "uid"?: строка}` — засчитать прослушивание (правило как на ПК: >50% трека или 4 минуты); `at` — для отложенной отправки из офлайна ; повтор с тем же `uid` (ответ потерялся — клиент отправил снова) не засчитывается: `{"ok": true, "duplicate": true}` |
-| `POST /api/wave/next` | `{"moods": [...], "genres": [...], "character": "mixed", "exclude": [id...], "n": 10}` (жанры сужают волну; только жанры без настроений — все треки этих жанров) → `{"items": [волновой трек]}` |
+| `POST /api/wave/next` | `{"moods": [...], "genres": [...], "langs": [...], "voices": [...], "character": "mixed", "exclude": [id...], "n": 10}` (жанры, языки и голоса сужают волну; без настроений — все треки, что подходят) или радио `{"seed_track": id}` / `{"seed_artist": "имя"}` (самые близкие по звуку и меткам, у исполнителя — и его треки; настроения не нужны) → `{"items": [волновой трек]}`. Варианты языков и голосов — `wave_langs` / `wave_voices` в `/api/info` (`[{key, name, n}]`; язык `foreign` — «не на русском»; голоса `voc`, `inst`, `female`, `male`, `raspy`) |
 | `POST /api/wave/rate` | `{"id", "verdict": "like" | "dislike", "kind", "moods"}` (kind и moods — из `wave` трека) → `{"result": "confirmed" | "rejected" | "liked" | "skipped", "moods"}` |
 | `POST /api/tracks/{id}/labels` | все метки разом, как лента разметки на ПК; меняются только переданные ключи: `{"moods", "reject", "genres", "flags", "lang", "vocal": "voc"/"inst"/null, "era": 1990/null}` → Track. Словари — `labels` в `/api/info` |
 | `POST /api/tracks/{id}/genres` `{"genres": [...]}` | жанры трека целиком (нужен `can_label`) → Track |
@@ -137,11 +142,27 @@ IP компьютера в домашней сети может сменитьс
 
 ### «Моя волна» на клиенте
 
-1. `POST /api/wave/next` с выбранными настроениями и характером (`favorite` | `unfamiliar` | `mixed` | `weak`).
+1. `POST /api/wave/next` с выбранными настроениями и характером (`favorite` | `unfamiliar` — редко слушанное, без
+   лайкнутых треков | `mixed` | `weak`). Смена настроения или характера во время игры не прерывает текущий трек:
+   клиент заменяет только то, что в очереди после него.
 2. Играть по очереди; когда до конца осталось 2–3 трека — снова `wave/next` с `exclude` = id уже полученных.
 3. Только если выбраны настроения: у трека с `wave.kind` `guess`/`auto` показывать «Модель думает: «…» (79%). Верно?»: 👍 → `wave/rate like`,
    👎 → `wave/rate dislike` и следующий трек, «Другое…» → `POST /api/tracks/{id}/moods`.
 4. Засчитанное прослушивание → `POST /api/plays`.
+
+### Ссылки «Поделиться»
+
+Ссылка — `<адрес>/open/track/<id>`, `<адрес>/open/artist/<имя>` или `<адрес>/open/album/<исполнитель>/<альбом>`
+(имена — `encodeURIComponent`), где адрес — `addresses.internet[0]` из `/api/info` (иначе адрес, по которому клиент ходит
+сам). **Ключа в ссылке нет**: она открывается под слушателем, который уже вошёл на устройстве получателя (cookie
+браузера или ключ приложения); без него — только вход / запрос доступа. `GET /open/<маршрут>` (без ключа) — 302:
+на Android — в приложение, `intent://open?server=<origin>&route=<track/5>&library=<id>#Intent;scheme=walleplayer;package=com.mitaywalle.player;S.browser_fallback_url=<origin>/?noapp=1#/<маршрут>;end`,
+иначе (и с `?noapp=1`) — на `/#/<маршрут>` веб-плеера. Редирект делает сервер, а не скрипт страницы: Chrome передаёт
+ссылку приложению только в переходе, который начал пользователь. Приложение принимает
+`walleplayer://open?server=…&route=…&library=…` и `https://<адрес>/open/…` (App Link; `GET /.well-known/assetlinks.json`
+— пакет и отпечаток ключа подписи приложения), ищет библиотеку по адресу или `library` и открывает маршрут своим
+ключом; ключа к этой библиотеке нет — открывает `/?noapp=1#/<маршрут>` в браузере. Старые ссылки `<адрес>/#/<маршрут>`
+веб-плеер на Android по-прежнему пробует передать приложению сам.
 
 ### Состояние связи
 

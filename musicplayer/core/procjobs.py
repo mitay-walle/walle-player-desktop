@@ -61,7 +61,8 @@ def scan(ctx: JobContext, emit, db_path: str, root: str, covers: str, full: bool
     try:
         ctx.log(f"Сканирование {root}")
         r = scanner.scan(db, root, covers, lambda d, t, m: (ctx.check(), ctx.progress(d, t, m)), full=full)
-        ctx.log(f"Готово: новых {r['added']}, обновлено {r['updated']}, пропало {r['missing']}, "
+        ctx.log(f"Готово: новых {r['added']}, обновлено {r['updated']}, перенесено {r.get('moved', 0)}, "
+                f"пропало {r['missing']}, "
                 f"ошибок {len(r['errors'])}, всего {r['total']}")
         return r
     finally:
@@ -97,6 +98,16 @@ def predict(ctx: JobContext, emit, db_path: str, models: str, threshold: float, 
         r = mood.predict(db, models, None, threshold, ctx, only_unlabelled=only_unlabelled)
         db.conn.commit()
         return r
+    finally:
+        db.close()
+
+
+def quality(ctx: JobContext, emit, db_path: str, until: float | None = None, limit: int | None = None) -> dict:
+    """Sound quality of the tracks not checked yet (core/quality.py), up to the time ``until`` (the night is over)."""
+    from . import quality as q
+    db = _db(db_path)
+    try:
+        return q.check(db, ctx, limit=limit, until=until)
     finally:
         db.close()
 

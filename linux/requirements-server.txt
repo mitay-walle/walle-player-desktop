@@ -1,0 +1,6 @@
+# The library server on Linux (python -m musicplayer.server --service): no Qt, no window, light enough for a mini PC.
+starlette==1.7.0
+uvicorn==0.54.0
+mutagen==1.48.1
+Pillow==12.3.0
+numpy==2.4.6

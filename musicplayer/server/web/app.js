@@ -79,6 +79,10 @@ function markItems(t) {
   if (t.album) items.push([isMarked("album", albumKey(t)) ? "close" : "trash",
                            isMarked("album", albumKey(t)) ? "Снять пометку удаления с альбома" : "Пометить альбом на удаление",
                            () => toggleMark("album", albumKey(t), `альбом «${t.album}»`)]);
+  const artist = t.albumartist || t.artist;
+  if (artist) items.push([isMarked("artist", artist) ? "close" : "trash",
+                          isMarked("artist", artist) ? "Снять пометку удаления с исполнителя" : "Пометить исполнителя на удаление",
+                          () => toggleMark("artist", artist, `исполнитель «${artist}»`)]);
   return items;
 }
 const hiddenSet = kind => new Set(HIDDEN.items.filter(i => i.kind === kind).map(i => i.key.toLowerCase()));
@@ -114,6 +118,11 @@ const P = {
     this.i = Math.max(0, Math.min(start, list.length - 1));
     if (this.shuffle && !this.wave) this.shuffleRest();
     this.load(true);
+  },
+  retarget(items, wave) {          // the wave's choice changed: the current song plays on, only what follows is new
+    this.wave = wave;
+    this.queue = [...this.queue.slice(0, this.i + 1), ...items.filter(t => t.id !== this.cur?.id)];
+    this.save(); renderPlayer(); renderQueueIfOpen(); renderWaveNow();
   },
   playNext(t) {
     if (!this.cur) return this.play([t]);
@@ -340,14 +349,15 @@ async function rate(verdict) {
   const t = P.cur;
   if (!t) return;
   if (verdict === "fix") return openLabels(t);
+  if (t.wave?.rated) return;
   if (!isGuess(t)) { if (verdict === "dislike") P.next(); return; }
   try {
     const res = await api("/api/wave/rate", { id: t.id, verdict, kind: t.wave.kind, moods: t.wave.moods });
     if (verdict === "like") {
       t.moods = [...new Set([...(t.moods || []), ...t.wave.moods])];
-      t.wave.kind = "known";
-      toast(`Спасибо! «${res.moods.join(", ")}» — подтверждено, модель учтёт`);
-      renderPlayer();
+      t.wave.kind = "known"; t.wave.rated = "like"; t.wave.confirmed = res.moods.length ? res.moods : t.wave.moods;
+      toast(`Спасибо! «${t.wave.confirmed.join(", ")}» — подтверждено, модель учтёт`);
+      renderPlayer(); renderWaveNow(); P.save();
     } else {
       toast("Понял, это настроение больше не предложу");
       t.wave.kind = "known"; t.wave.moods = [];
@@ -495,7 +505,13 @@ function renderPlayer() {
   mc.className = `cover sm ${t.cover ? "" : "empty"}`; mc.style.backgroundImage = t.cover ? `url('${t.cover}')` : "";
   $("#mini-title").textContent = t.title;
   $("#mini-artist").textContent = t.artist;
-  $("#mini-rate").hidden = !isGuess(t);
+  const rated = t.wave?.rated === "like";
+  $("#mini-rate").hidden = !isGuess(t) && !rated;
+  document.querySelectorAll('[data-rate="like"]').forEach(b => {
+    b.classList.toggle("on", rated); b.disabled = rated;
+    b.querySelector("use")?.setAttribute("href", rated ? "#i-up-on" : "#i-up");
+  });
+  document.querySelectorAll('[data-rate="dislike"], [data-rate="fix"]').forEach(b => { b.hidden = rated; });
   $("#mini-like").hidden = (isGuess(t) && innerWidth < 900) || NET.down;
   document.querySelectorAll("[data-like]").forEach(b => { if (b.id !== "mini-like") b.hidden = NET.down; });
   document.querySelectorAll("[data-hide]").forEach(b => { b.hidden = NET.down; });
@@ -511,8 +527,9 @@ function renderPlayer() {
   $("#full-artist").textContent = t.artist + (t.album ? " · " + t.album : "");
   $("#full-label").textContent = P.wave ? "Моя волна" : "Сейчас играет";
   const g = isGuess(t);
-  $("#guess").hidden = !g;
-  if (g) {
+  $("#guess").hidden = !g && !rated;
+  if (rated) $("#guess-text").innerHTML = `Подтверждено: <b>«${esc(t.wave.confirmed.join(", "))}»</b> — модель учтёт`;
+  else if (g) {
     const who = t.wave.kind === "auto" ? "Определено автоматически" : "Модель думает";
     const conf = t.wave.conf != null ? ` (${Math.round(t.wave.conf * 100)}%)` : "";
     $("#guess-text").innerHTML = `${who}: <b>«${esc(t.wave.moods.join(", "))}»</b>${conf}. Верно?`;
@@ -530,7 +547,7 @@ function renderPlayer() {
   gl.disabled = !canLabel();
   document.querySelectorAll('[data-act="shuffle"]').forEach(b => b.classList.toggle("on", P.shuffle));
   document.querySelectorAll('[data-act="repeat"]').forEach(b => { b.classList.toggle("on", P.repeat !== "off"); b.classList.toggle("one", P.repeat === "one"); });
-  $("#full-wave").textContent = P.wave ? (P.wave.moods.length || P.wave.genres?.length ? "Волна: " + waveTitle(P.wave) : "Моя волна играет") : "AI-радио по настроению";
+  $("#full-wave").textContent = P.wave ? (waveTitle(P.wave) === "Все настроения" ? "Моя волна играет" : "Волна: " + waveTitle(P.wave)) : "AI-радио по настроению";
   renderPlayState(); renderTime();
 }
 function renderPlayState() {
@@ -538,6 +555,7 @@ function renderPlayState() {
   document.querySelectorAll('[data-act="toggle"] use').forEach(u => u.setAttribute("href", playing ? "#i-pause" : "#i-play"));
   const wb = $("#wave-play use"); if (wb) wb.setAttribute("href", playing && P.wave ? "#i-pause" : "#i-play");
   if ("mediaSession" in navigator) navigator.mediaSession.playbackState = playing ? "playing" : "paused";
+  renderWaveState();
 }
 function renderTime() {
   const dur = audio.duration || P.cur?.duration || 0, pos = audio.currentTime || 0;
@@ -659,6 +677,40 @@ function hideMenu(t) {
   });
 }
 
+// ---- sharing: a link to a track, album or artist without the key - it opens only for someone who already listens to
+// this library on their device (their own cookie / the app's key); everybody else sees the login screen
+const SHARE_RE = /^(track|artist|album)\//;
+const trackPath = t => `track/${t.id}`;
+const artistPath = name => `artist/${encodeURIComponent(name)}`;
+const albumPath = (artist, album) => `album/${encodeURIComponent(artist)}/${encodeURIComponent(album)}`;
+function shareLink(path) {
+  const base = (INFO?.addresses?.internet?.[0] || location.origin).replace(/\/+$/, "");   // works away from home too
+  return `${base}/open/${path}`;       // the server sends it on: to the app on Android, else to #/<path> here
+}
+async function share(title, path) {
+  const url = shareLink(path);
+  if (navigator.share) {
+    try { await navigator.share({ title, url }); return; }
+    catch (e) { if (e.name === "AbortError") return; }
+  }
+  try { await navigator.clipboard.writeText(url); toast("Ссылка скопирована. Откроется у тех, кто слушает эту библиотеку"); }
+  catch { window.prompt("Ссылка", url); }
+}
+function sharePill(title, path) {
+  const b = document.createElement("button");
+  b.className = "pill"; b.innerHTML = `${icon("share")}Поделиться`; b.title = "Ссылка для тех, кто слушает эту библиотеку";
+  b.onclick = () => share(title, path);
+  return b;
+}
+(function openInApp() {                     // Android: an older #/ link opens in the app when it is installed
+  const route = location.hash.replace(/^#\/?/, "");
+  if (!SHARE_RE.test(route) || !/Android/i.test(navigator.userAgent) || new URLSearchParams(location.search).has("noapp")
+      || matchMedia("(display-mode: standalone)").matches) return;
+  const back = `${location.origin}/?noapp=1${location.hash}`;          // no app (or an old one): this page in the browser
+  location.replace(`intent://open?server=${encodeURIComponent(location.origin)}&route=${encodeURIComponent(route)}`
+    + `#Intent;scheme=walleplayer;package=com.mitaywalle.player;S.browser_fallback_url=${encodeURIComponent(back)};end`);
+})();
+
 function trackMenu(t, fromPlayer = false) {
   const items = [
     !fromPlayer && ["play", "Играть следующим", () => P.playNext(t)],
@@ -666,8 +718,11 @@ function trackMenu(t, fromPlayer = false) {
     !fromPlayer && !NET.down && [t.liked ? "heart-on" : "heart", t.liked ? "Убрать из любимых" : "Нравится", () => toggleLike(t)],
     OFF.available && (OFF.has(t.id) ? ["close", "Удалить с устройства", () => OFF.remove([t.id]).then(() => { toast("Удалено с устройства"); if (NET.down) render(); })]
                                      : !NET.down && ["download", "Скачать на устройство", () => OFF.download([t])]),
-    ["user", "К исполнителю", () => { closeFull(); go(`artist/${encodeURIComponent(t.albumartist || t.artist)}`); }],
-    t.album && ["album", "К альбому", () => { closeFull(); go(`album/${encodeURIComponent(t.albumartist || t.artist)}/${encodeURIComponent(t.album)}`); }],
+    !NET.down && ["wave", "Радио по треку", () => startRadio({ track: t })],
+    !NET.down && ["wave", "Радио исполнителя", () => startRadio({ artist: t.albumartist || t.artist })],
+    !NET.down && ["share", "Поделиться", () => share(`${t.title} — ${t.artist}`, trackPath(t))],
+    ["user", "К исполнителю", () => { closeFull(); go(artistPath(t.albumartist || t.artist)); }],
+    t.album && ["album", "К альбому", () => { closeFull(); go(albumPath(t.albumartist || t.artist, t.album)); }],
     canLabel() && !NET.down && ["tag", "Разметить трек…", () => openLabels(t)],
     fromPlayer && ["queue", "Очередь", () => openQueue()],
     ...(NET.down ? [] : hideItems(t)),
@@ -807,7 +862,7 @@ const VIEWS = {
   wave(info = INFO) {
     if (typeof info !== "object" || !info) info = INFO;
     setTop("Моя волна", false);
-    const ws = { moods: [], character: "mixed", genres: [], ...store.get("wp_wave", {}) };
+    const ws = { moods: [], character: "mixed", genres: [], langs: [], voices: [], ...store.get("wp_wave", {}) };
     let allGenres = false;
     const groups = {};
     const hm = hiddenSet("mood"), hg = hiddenSet("genre");
@@ -816,9 +871,9 @@ const VIEWS = {
       <div class="wave-hero">
         <button class="play-btn xl" id="wave-play" aria-label="Запустить волну">${icon("play")}</button>
         <h2 id="wave-head"></h2>
+        <div class="wave-state" id="wave-state" role="status" aria-live="polite"></div>
         <p id="wave-hint">${canLabel() ? "Трек за треком без конца по выбранным настроениям. Если модель не уверена в настроении трека, в плеере появится вопрос «Верно?» — ваш 👍 или 👎 её учит."
                         : "Трек за треком без конца — выберите настроение и характер."}</p>
-        <div class="wave-now" id="wave-now" hidden></div>
       </div>
       <div class="group-name">Характер</div>
       <div class="seg" id="wave-char">${info.characters.map(c => `<button data-c="${c.key}">${esc(c.name)}</button>`).join("")}</div>
@@ -826,6 +881,10 @@ const VIEWS = {
         `<button class="chip" data-m="${esc(m.name)}"><span class="g" style="color:${m.color}">${esc(m.glyph)}</span>${esc(m.name)}${m.n ? ` <span class="cnt">${m.n}</span>` : ""}</button>`).join("")}</div>`).join("")}
       <div class="group-name">Жанры</div>
       <div class="chips" id="wave-genres"></div>
+      ${(info.wave_langs || []).length ? `<div class="group-name">Язык</div><div class="chips">${info.wave_langs.map(x =>
+        `<button class="chip" data-lang="${esc(x.key)}">${esc(x.name)} <span class="cnt">${x.n}</span></button>`).join("")}</div>` : ""}
+      ${(info.wave_voices || []).length ? `<div class="group-name">Голос</div><div class="chips">${info.wave_voices.map(x =>
+        `<button class="chip" data-voice="${esc(x.key)}">${esc(x.name)} <span class="cnt">${x.n}</span></button>`).join("")}</div>` : ""}
       <div class="actions" style="margin-top:18px"><button class="pill ghost" id="wave-reset">Сбросить выбор</button></div>`;
     const paintGenres = () => {
       const top = (info.genres || []).filter(g => !hg.has(g.name.toLowerCase()));
@@ -843,6 +902,8 @@ const VIEWS = {
     const paint = () => {
       view.querySelectorAll("[data-m]").forEach(b => b.classList.toggle("on", ws.moods.includes(b.dataset.m)));
       view.querySelectorAll("[data-c]").forEach(b => b.classList.toggle("on", b.dataset.c === ws.character));
+      view.querySelectorAll("[data-lang]").forEach(b => b.classList.toggle("on", ws.langs.includes(b.dataset.lang)));
+      view.querySelectorAll("[data-voice]").forEach(b => b.classList.toggle("on", ws.voices.includes(b.dataset.voice)));
       $("#wave-head").textContent = waveTitle(ws);
       store.set("wp_wave", ws);
     };
@@ -851,13 +912,18 @@ const VIEWS = {
       if (P.wave) startWave(ws);
     });
     view.querySelectorAll("[data-c]").forEach(b => b.onclick = () => { ws.character = b.dataset.c; paint(); if (P.wave) startWave(ws); });
+    const toggleIn = (key, v) => { ws[key] = ws[key].includes(v) ? ws[key].filter(x => x !== v) : [...ws[key], v]; paint(); if (P.wave) startWave(ws); };
+    view.querySelectorAll("[data-lang]").forEach(b => b.onclick = () => toggleIn("langs", b.dataset.lang));
+    view.querySelectorAll("[data-voice]").forEach(b => b.onclick = () => toggleIn("voices", b.dataset.voice));
     if (!NET.down) {                                   // long press on a phone, right click on a PC: «Не показывать»
       view.querySelectorAll("[data-m]").forEach(b => b.oncontextmenu = e => { e.preventDefault(); askHide("mood", b.dataset.m); });
       $("#wave-genres").oncontextmenu = e => { const b = e.target.closest("[data-g]"); if (b) { e.preventDefault(); askHide("genre", b.dataset.g); } };
     }
-    $("#wave-reset").onclick = () => { ws.moods = []; ws.genres = []; paint(); paintGenres(); if (P.wave) startWave(ws); };
+    $("#wave-reset").onclick = () => { ws.moods = []; ws.genres = []; ws.langs = []; ws.voices = []; paint(); paintGenres(); if (P.wave) startWave(ws); };
     $("#wave-play").onclick = () => {
-      if (P.wave && P.cur && sameWave(P.wave, ws)) P.toggle(); else startWave(ws);
+      if (P.wave && P.cur && sameWave(P.wave, waveParams(ws))) return P.toggle();
+      const going = P.wave && P.cur;                   // a radio or another wave plays: it goes on, the rest follows the choice
+      startWave(ws).then(() => { if (going && audio.paused) audio.play().catch(() => {}); });
     };
     paint(); paintGenres(); renderWaveNow(); renderPlayState();
   },
@@ -929,9 +995,44 @@ const VIEWS = {
     const [r, fav] = await Promise.all([api("/api/tracks?" + new URLSearchParams({ artist: name, order: "album", limit: 500 })), api("/api/favorites")]);
     const acts = listActions(() => r.items);
     acts.append(likePill(fav.artists.includes(name), { kind: "artist", name }));
+    const radio = document.createElement("button");
+    radio.className = "pill"; radio.innerHTML = `${icon("wave")}Радио`; radio.title = "Волна из этого исполнителя и похожих";
+    radio.onclick = () => startRadio({ artist: name });
+    acts.append(radio, sharePill(name, artistPath(name)));
     $("#ar-actions").replaceChildren(acts);
     $("#ar-list").innerHTML = `<div class="list">${trackRows(r.items)}</div>`;
     bindRows($("#ar-list").firstElementChild, () => r.items);
+  },
+
+  async track(id) {                           // a shared link: the track, play it, on to its artist / album
+    setTop("Трек", true);
+    view.innerHTML = `<div class="loader">Загрузка…</div>`;
+    let t;
+    try { t = await api(`/api/tracks/${encodeURIComponent(id)}`); }
+    catch (e) {
+      if (e.message === "401" || e.message === NOCONN) throw e;
+      view.innerHTML = `<div class="empty-note">Этого трека в библиотеке больше нет</div>`;
+      return;
+    }
+    setTop(t.title, true);
+    const artist = t.albumartist || t.artist;
+    view.innerHTML = `<div style="display:flex;gap:16px;align-items:flex-end;margin:4px 0 14px">${coverEl(t, "")}
+      <div><div style="font-size:18px;font-weight:600">${esc(t.title)}</div><div style="color:var(--muted)">${esc(t.artist)}</div>
+      <div style="color:var(--dim);font-size:13px">${esc([t.album, t.year].filter(Boolean).join(" · "))}</div></div></div>
+      <div id="tr-actions"></div><div class="list" id="tr-list">${trackRows([t])}</div>`;
+    const c = view.querySelector(".cover"); c.style.width = c.style.height = "120px"; c.style.borderRadius = "12px";
+    const acts = listActions(() => [t]);
+    acts.children[1].remove();                // «Перемешать» says nothing for one track
+    const to = (ic, text, path) => { const b = document.createElement("button"); b.className = "pill";
+      b.innerHTML = `${icon(ic)}${text}`; b.onclick = () => go(path); return b; };
+    const radio = document.createElement("button");
+    radio.className = "pill"; radio.innerHTML = `${icon("wave")}Радио`; radio.title = "Волна из похожих на этот трек";
+    radio.onclick = () => startRadio({ track: t });
+    acts.append(radio, to("user", "Исполнитель", artistPath(artist)));
+    if (t.album) acts.append(to("album", "Альбом", albumPath(artist, t.album)));
+    acts.append(sharePill(`${t.title} — ${t.artist}`, trackPath(t)));
+    $("#tr-actions").replaceChildren(acts);
+    bindRows($("#tr-list"), () => [t]);
   },
 
   async albums() {
@@ -970,7 +1071,8 @@ const VIEWS = {
       <div id="alb-actions"></div><div class="list" id="alb-list">${trackRows(r.items)}</div>`;
     const c = view.querySelector(".cover"); c.style.width = c.style.height = "120px"; c.style.borderRadius = "12px";
     const acts = listActions(() => r.items);
-    acts.append(likePill(fav.albums.some(a => a.artist === artist && a.name === name), { kind: "album", artist, album: name }));
+    acts.append(likePill(fav.albums.some(a => a.artist === artist && a.name === name), { kind: "album", artist, album: name }),
+      sharePill(`${name} — ${artist}`, albumPath(artist, name)));
     $("#alb-actions").replaceChildren(acts);
     bindRows($("#alb-list"), () => r.items);
   },
@@ -1051,6 +1153,14 @@ function waveFits(t, w) {
   const genres = new Set((w?.genres || []).map(g => g.toLowerCase()));
   if (want.size && !moods.length) return null;
   if (genres.size && !(t.genres || []).some(g => genres.has(g.toLowerCase()))) return null;
+  const langs = new Set(w?.langs || []);
+  if (langs.size && !(langs.has(t.lang) || (langs.has("foreign") && t.lang !== "ru"))) return null;
+  const voices = new Set(w?.voices || []);
+  if (voices.size) {
+    const have = new Set((t.flags || []).filter(f => ["female", "male", "raspy"].includes(f)));
+    if (t.vocal === "inst") have.add("inst"); else if (t.vocal === "voc" || have.size) have.add("voc");
+    if (![...have].some(v => voices.has(v))) return null;
+  }
   return [...new Set(moods)];
 }
 async function offlineTracks(n, exclude = new Set(), wave = null) {
@@ -1069,38 +1179,61 @@ async function playOffline(shuffle) {
 }
 
 const sameSet = (a = [], b = []) => a.length === b.length && a.every(x => b.includes(x));
-const sameWave = (a, b) => a && b && a.character === b.character && sameSet(a.moods, b.moods) && sameSet(a.genres, b.genres);
-const waveTitle = w => [w.moods.join(" · "), (w.genres || []).join(" · ")].filter(Boolean).join(" — ") || "Все настроения";
+const sameWave = (a, b) => a && b && a.character === b.character && sameSet(a.moods, b.moods) && sameSet(a.genres, b.genres)
+  && sameSet(a.langs, b.langs) && sameSet(a.voices, b.voices) && a.seed_track == b.seed_track && a.seed_artist == b.seed_artist;
+const keyName = (list, k) => (list || []).find(x => x.key === k)?.name || k;
+const waveTitle = w => w.seed_track != null ? `Радио по треку «${w.seed_title || ""}»` : w.seed_artist ? `Радио: ${w.seed_artist}`
+  : [(w.moods || []).join(" · "), (w.genres || []).join(" · "), (w.langs || []).map(k => keyName(INFO.wave_langs, k)).join(" · "),
+     (w.voices || []).map(k => keyName(INFO.wave_voices, k)).join(" · ")].filter(Boolean).join(" — ") || "Все настроения";
+const waveParams = ws => ({ moods: (ws.moods || []).slice(), character: ws.character || "mixed", genres: (ws.genres || []).slice(),
+  langs: (ws.langs || []).slice(), voices: (ws.voices || []).slice() });
+let WAVE_LOADING = false;
+function renderWaveState() {          // what the wave is doing, under its title: starting, playing, paused, not started
+  const el = $("#wave-state");
+  if (!el) return;
+  const on = P.wave && P.cur;
+  const radio = on && (P.wave.seed_track != null || P.wave.seed_artist);
+  el.textContent = WAVE_LOADING ? "Подбираю треки…"
+    : !on ? "Волна не запущена — нажмите ▶"
+    : (radio ? `Играет ${waveTitle(P.wave)}` : "Волна играет") + (audio.paused ? " · пауза" : ` · дальше ${P.queue.length - P.i - 1} в очереди`);
+  el.classList.toggle("live", !!on && !audio.paused);
+  document.querySelectorAll("#wave-play").forEach(b => b.classList.toggle("buffering", WAVE_LOADING));
+}
 
-async function startWave(ws) {
+// a playing wave whose choice changes keeps its current song (retarget); otherwise the wave starts from its first track
+async function startWave(ws, params = waveParams(ws), first = null) {
+  const keep = !first && P.wave && P.cur;
+  WAVE_LOADING = true; renderWaveState();
   try {
-    const params = { moods: ws.moods.slice(), character: ws.character, genres: (ws.genres || []).slice() };
-    const res = await api("/api/wave/next", { ...params, exclude: [], n: 10 });
-    if (!res.items.length) return toast("Под такой выбор пока нет треков — выберите другие настроения или жанры");
-    P.play(res.items, 0, { wave: params });
+    const exclude = keep ? [P.cur.id] : first ? [first.id] : [];
+    const res = await api("/api/wave/next", { ...params, exclude, n: 10 });
+    if (!res.items.length && !first) return toast("Под такой выбор пока нет треков — выберите другие настроения, жанры, язык или голос", 4000);
+    if (keep) {
+      const ch = (INFO.characters || []).find(c => c.key === params.character)?.name;
+      P.retarget(res.items, params);
+      toast(`Дальше — ${waveTitle(params)}${ch && params.seed_track == null && !params.seed_artist ? ", " + ch.toLowerCase() : ""}; этот трек доиграет`, 2400);
+    }
+    else P.play(first ? [first, ...res.items] : res.items, 0, { wave: params });
   } catch (e) {
     if (e.message === NOCONN && OFF.ids.size) {             // no connection: the wave from the music saved on the device
-      const params = { moods: ws.moods.slice(), character: ws.character, genres: (ws.genres || []).slice() };
       const list = await offlineTracks(10, new Set(), params);
       if (!list.length) return toast(`Нет связи, а среди скачанного нет треков: ${waveTitle(params)}`, 4000);
-      P.play(list, 0, { wave: params });
+      if (keep) P.retarget(list, params); else P.play(list, 0, { wave: params });
       toast("Нет связи — волна из скачанного");
     } else if (e.message !== "401") toast("Волна: " + e.message);
-  }
+  } finally { WAVE_LOADING = false; renderWaveState(); }
+}
+// radio: a wave from one track (it plays first, or goes on if it is playing) or from one artist
+function startRadio({ track, artist }) {
+  const params = { moods: [], character: "mixed", genres: [], langs: [], voices: [] };
+  if (track) Object.assign(params, { seed_track: track.id, seed_title: track.title }); else params.seed_artist = artist;
+  if (track && P.cur && P.cur.id === track.id) return startWave({}, params);   // keep listening to it, the radio follows
+  if (track) return startWave({}, params, track);
+  P.wave = null;                                        // an artist's radio starts afresh
+  return startWave({}, params);
 }
 
-function renderWaveNow() {
-  const box = $("#wave-now");
-  if (!box) return;
-  const t = P.cur;
-  box.hidden = !(t && P.wave);
-  if (!t || !P.wave) return;
-  const g = isGuess(t);
-  box.innerHTML = `${coverEl(t, "md")}<span class="row-text"><b>${esc(t.title)}</b><small>${esc(t.artist)}${g ? ` · модель думает: ${esc(t.wave.moods.join(", "))}` : ""}</small></span>
-    ${g ? `<button class="icon-btn" data-rate="dislike" aria-label="Не подходит">${icon("thumbdown")}</button><button class="icon-btn" data-rate="like" aria-label="Подходит">${icon("up")}</button>`
-        : `<button class="icon-btn" data-act="next" aria-label="Следующий">${icon("next")}</button>`}`;
-  box.onclick = e => { if (!e.target.closest("button")) openFull(); };
-}
+function renderWaveNow() { renderWaveState(); }   // the playing track itself is in the player bar, not repeated here
 
 function openProfile() {
   const u = INFO.user || {};
@@ -1152,6 +1285,7 @@ setInterval(checkUpdate, 10 * 60e3);
 async function showLogin() {
   if (!$("#login").hidden) return;
   $("#login").hidden = false;
+  $("#login-share").hidden = !SHARE_RE.test(location.hash.replace(/^#\/?/, ""));   // the link waits in the address
   const srv = $("#login-server");
   try {                                                         // the connection is checked at once
     const p = await (await fetch("/api/ping", { cache: "no-store" })).json();

@@ -59,6 +59,30 @@ def metadata_score(a: dict, b: dict) -> float:
     return s
 
 
+def radio_scores(db: Database, seeds: list[dict], pool: list[dict]) -> dict[int, float]:
+    """How close each pool track is to the seeds (a track, or an artist's tracks): 0..1, the same blend as
+    ``similar_tracks`` against the seeds' average sound.  One query for all the embeddings."""
+    seed_ids = {s["id"] for s in seeds}
+    vec: dict[int, np.ndarray] = {}
+    for tid, blob in db.conn.execute("SELECT track_id, vec FROM track_embeddings WHERE model=?", (EMB_MODEL,)):
+        vec[tid] = np.frombuffer(blob, dtype=np.float32)
+    q = [vec[i] for i in seed_ids if i in vec]
+    qv = None
+    if q:
+        qv = np.mean([v / (np.linalg.norm(v) + 1e-9) for v in q], axis=0)
+        qv /= np.linalg.norm(qv) + 1e-9
+    out = {}
+    for t in pool:
+        if t["id"] in seed_ids:
+            continue
+        meta = max(metadata_score(s, t) for s in seeds[:20])
+        v = vec.get(t["id"]) if qv is not None else None
+        score = 0.7 * max(float(v @ qv) / (np.linalg.norm(v) + 1e-9), 0) + 0.3 * meta if v is not None else meta
+        if score > 0:
+            out[t["id"]] = score
+    return out
+
+
 def similar_tracks(db: Database, track_id: int, limit: int = 20, same_artist: bool = True) -> list[dict]:
     """Tracks most similar to ``track_id``; each result carries ``similarity`` (0..1) and ``basis``."""
     src = db.get_track(track_id)

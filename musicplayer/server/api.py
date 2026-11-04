@@ -24,6 +24,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote, urlencode
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -32,12 +33,12 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from musicplayer import __version__
-from musicplayer.core import deletemarks, hidden
+from musicplayer.core import artistimg, deletemarks, hidden
 from musicplayer.core import moods as moodvocab
 from musicplayer.core.flags import FLAGS
 from musicplayer.core.genres import ERAS, FAMILY_COLOURS, GENRE_TREE
 from musicplayer.core.db import TRACK_COLS, Database, weighted_order
-from musicplayer.core.wave import CHARACTERS, Wave
+from musicplayer.core.wave import CHARACTERS, VOICES, Wave, wave_filters
 
 log = logging.getLogger(__name__)
 API_VERSION = 1          # raised when the API changes so that older clients break; additions keep it
@@ -61,6 +62,10 @@ def latest_mobile(folder: Path) -> dict | None:
     return {"version": ver, "file": f.name, "url": f"/api/app/{f.name}", "size": f.stat().st_size}
 COOKIE = "wp_k"
 WEB_DIR = Path(__file__).resolve().parent / "web"
+SHARE_ROUTE = re.compile(r"^(track/\d+|artist/[^/?#]+|album/[^/?#]+/[^/?#]+)$")   # «Поделиться» links (/open/...)
+ANDROID_APP = "com.mitaywalle.player"     # the Android app (WallePlayerMobile) and its release signing certificate
+ANDROID_CERT = ("E4:FB:C1:CA:BD:40:0B:73:E2:E4:98:08:0F:FB:58:69:"
+                "BF:1A:B4:4A:13:A0:44:7C:38:76:6E:9F:81:32:7A:F9")
 MAX_LIMIT = 500
 FAIL_WINDOW, FAIL_MAX = 600.0, 10          # wrong keys per address per 10 minutes before a ban (fail2ban-like)
 BAN_BASE, BAN_FACTOR, BAN_MAX = 3600.0, 4, 7 * 86400   # 1 h, then 4 h, 16 h, ... at most a week
@@ -531,6 +536,30 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
             access.failed(addr)
         return FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
+    # «Поделиться»: <address>/open/<route> (track/5, artist/<name>, album/<artist>/<album>, names percent-encoded).
+    # On Android the browser goes on to the app, which opens the route under its own key of this library (no app -
+    # this page in the browser); elsewhere straight to the web player's page. A redirect from the server, not from the
+    # page's script: Chrome hands a link to an app only during a navigation the user started (a tap on the link).
+    async def open_link(request: Request):
+        raw = request.scope.get("raw_path") or request.url.path.encode()
+        route = raw.decode("latin-1")[len("/open/"):]
+        if not SHARE_ROUTE.match(route):
+            return RedirectResponse("/", status_code=302)
+        if "android" not in request.headers.get("user-agent", "").lower() or "noapp" in request.query_params:
+            return RedirectResponse(f"/#/{route}", status_code=302)
+        https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+        origin = f"{'https' if https else 'http'}://{request.url.netloc}"
+        back = f"{origin}/?noapp=1#/{route}"
+        query = urlencode({"server": origin, "route": route, "library": info.get("library", "")})
+        return RedirectResponse(f"intent://open?{query}#Intent;scheme=walleplayer;package={ANDROID_APP};"
+                                f"S.browser_fallback_url={quote(back, safe='')};end", status_code=302)
+
+    # Android App Links: the app opens <address>/open/... itself, without the browser (verified on install)
+    async def assetlinks(request: Request):
+        return JSONResponse([{"relation": ["delegate_permission/common.handle_all_urls"],
+                              "target": {"namespace": "android_app", "package_name": ANDROID_APP,
+                                         "sha256_cert_fingerprints": [ANDROID_CERT]}}])
+
     async def login(request: Request):
         addr = Access.address(request)
         if access.blocked(addr):
@@ -610,6 +639,83 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
             log.exception("listeners not saved")
         return JSONResponse(me(user))
 
+    # ---- the listeners (owner only): the desktop app shows the server's QR codes and links ------------------------
+    def listeners() -> dict:
+        return {"users": [{k: u.get(k) for k in ("id", "name", "owner", "can_label", "token", "created")}
+                          for u in access.users],
+                "addresses": access.addresses(), "clients": access.connected()}
+
+    def saved() -> JSONResponse:
+        try:
+            access.save()
+        except Exception:  # noqa: BLE001 - the change holds in memory anyway
+            log.exception("listeners not saved")
+        return JSONResponse(listeners())
+
+    def api_listeners(request: Request, user: dict, _b):
+        if not user.get("owner"):
+            return _err(403, "only the owner manages listeners")
+        return JSONResponse(listeners())
+
+    def api_add_listener(request: Request, user: dict, body: dict):
+        """{name, can_label}: a new listener with an own key."""
+        if not user.get("owner"):
+            return _err(403, "only the owner manages listeners")
+        from musicplayer.server.config import make_user
+        name = " ".join(str(body.get("name") or "").split())[:40]
+        if not name:
+            return _err(400, "name required")
+        u = make_user(name, can_label=bool(body.get("can_label")))
+        with access.lock:
+            access.users.append(u)
+        return saved()
+
+    def api_edit_listener(request: Request, user: dict, body: dict):
+        """{name?, can_label?, new_key?, remove?} for one listener; the owner's own key and rights stay as they are
+        (the desktop copies sync with that key)."""
+        if not user.get("owner"):
+            return _err(403, "only the owner manages listeners")
+        from musicplayer.server.config import new_token
+        uid = request.path_params["uid"]
+        with access.lock:
+            u = next((x for x in access.users if x["id"] == uid), None)
+            if u is None:
+                return _err(404, "no such listener")
+            if u.get("owner") and any(body.get(k) is not None for k in ("can_label", "new_key", "remove")):
+                return _err(400, "the owner's key and rights are not changed here")
+            if body.get("remove"):
+                access.users[:] = [x for x in access.users if x["id"] != uid]   # the same list: the app's config sees it
+            else:
+                name = " ".join(str(body.get("name") or "").split())[:40]
+                if name:
+                    u["name"] = name
+                if body.get("can_label") is not None:
+                    u["can_label"] = bool(body["can_label"])
+                if body.get("new_key"):
+                    u["token"] = new_token()                  # that listener's devices lose access, the others keep it
+        return saved()
+
+    def api_import_likes(request: Request, user: dict, body: dict):
+        """{items: [{artist, title, added?} | {path}], dry_run}: «Импорт лайков» for one listener - the desktop app
+        reads the file, the matching runs here (track ids of the copies differ)."""
+        if not user.get("owner"):
+            return _err(403, "only the owner manages listeners")
+        from musicplayer.core import likeimport
+        who = next((u for u in access.users if u["id"] == request.path_params["uid"]), None)
+        if who is None:
+            return _err(404, "no such listener")
+        items = [i for i in (body.get("items") or [])[:20000] if isinstance(i, dict)]
+
+        def go(db: Database):
+            res = likeimport.match(db, items)
+            out = {"items": len(items), "matched": len(res["matched"]),
+                   "unmatched": [likeimport.describe(i) for i in res["unmatched"]]}
+            if not body.get("dry_run"):
+                out["added"] = likeimport.apply(db, who, [t["id"] for _, t in res["matched"]],
+                                                [i.get("added") for i, _ in res["matched"]])
+            return out
+        return JSONResponse(lib(go))
+
     def api_info(request: Request, user: dict, _b):
         def go(db: Database):
             counts = {m["name"]: m["n"] for m in db.list_moods()}
@@ -620,6 +726,7 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
             return {"app": "WallePlayer", **versions(), **info, "tracks": total,
                     "user": me(user), "addresses": access.addresses(), "moods": moods, "mood_groups": moodvocab.GROUPS,
                     "characters": [{"key": k, "name": v} for k, v in CHARACTERS.items()],
+                    **wave_filters(db),
                     "genres": [{"name": g["name"], "n": g["n"]} for g in db.list_values("genre")[:60]],
                     "labels": {"genre_tree": [{"name": f, "color": GENRE_COLOURS.get(f, "#C8CDD3"), "subs": subs}
                                               for f, subs in GENRE_TREE.items()],
@@ -696,11 +803,13 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
 
     def api_artists(request: Request, user: dict, _b):
         liked = set(lib.liked(user, "artist"))
-        rows = lib(lambda db: hidden.visible_values(db, user["id"], "artist", db.list_values("artist")))
-        return JSONResponse({"items": [r | {"liked": r["name"] in liked} for r in rows]})
+        rows = lib(lambda db: hidden.visible_values(db, user["id"], "artist", db.list_values("artist", user["id"], None if user.get("owner") else user["id"])))
+        return JSONResponse({"items": [r | {"liked": r["name"] in liked,
+                                             "image": f"/api/artist_image?name={quote(r['name'] or '', safe='')}"}
+                                       for r in rows]})
 
     def api_albums(request: Request, user: dict, _b):
-        rows = lib(lambda db: hidden.visible_values(db, user["id"], "album", db.list_values("album")))
+        rows = lib(lambda db: hidden.visible_values(db, user["id"], "album", db.list_values("album", user["id"])))
         liked = set(lib.liked(user, "album"))
         return JSONResponse({"items": [{"name": r["name"], "artist": r["artist"], "year": r["year"], "n": r["n"],
                                         "liked": album_key(r["artist"] or "", r["name"]) in liked,
@@ -710,27 +819,91 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
     def api_genres(request: Request, user: dict, _b):
         return JSONResponse({"items": lib(lambda db: hidden.visible_values(db, user["id"], "genre", db.list_values("genre")))})
 
+    # ---- sync of desktop copies (owner only): see core/sync.py ----------------------------------------------
+    def api_sync_pull(request: Request, user: dict, _b):
+        """?since=<seq>&node=<the caller's node>&limit= - journal entries after ``since`` not made by the caller."""
+        if not user.get("owner"):
+            return _err(403, "only the owner's key syncs")
+        from musicplayer.core import sync
+        q = request.query_params
+
+        def go(db: Database):
+            if not sync.enabled(db.conn):
+                return None
+            ents, last = sync.entries_since(db.conn, _int(q.get("since"), 0, lo=0),
+                                            _int(q.get("limit"), 2000, lo=1, hi=5000),
+                                            exclude_origin=q.get("node") or None)
+            return {"entries": ents, "last": last, "head": sync.head(db.conn), "node": sync.node(db.conn)}
+        r = lib(go)
+        return JSONResponse(r) if r is not None else _err(409, "sync is not enabled on the server")
+
+    def api_sync_push(request: Request, user: dict, body: dict):
+        """{node, entries: [...]} - entries the caller made; applied when nothing newer is here."""
+        if not user.get("owner"):
+            return _err(403, "only the owner's key syncs")
+        from musicplayer.core import sync
+        node, entries = str(body.get("node") or ""), body.get("entries")
+        if not node or not isinstance(entries, list):
+            return _err(400, "node and entries expected")
+
+        def go(db: Database):
+            if not sync.enabled(db.conn):
+                return None
+            for e in entries:
+                e["origin"] = node                  # a peer may only speak for itself
+            return sync.apply(db, entries, accept_new_tracks=False)
+        r = lib(go)
+        if r is None:
+            return _err(409, "sync is not enabled on the server")
+        if r["tracks"]:
+            lib.changed(r["tracks"])
+        return JSONResponse({"applied": r["applied"], "skipped": r["skipped"]})
+
+    def api_trash(request: Request, user: dict, _b):
+        """Delete a track's file here (the owner's desktop app deletes through the server): Recycle Bin / trash folder."""
+        if not user.get("owner"):
+            return _err(403, "only the owner deletes files")
+        from musicplayer.core import deletemarks, trash
+        tid = _int(request.path_params["tid"], 0)
+        try:
+            root = json.loads((lib.models.parent / "settings.json").read_text(encoding="utf-8")).get("library_root")
+        except (OSError, ValueError):
+            root = None
+
+        def go(db: Database):
+            t = db.get_track(tid)
+            if not t:
+                return None
+            res = trash.trash_tracks(db, [t], lambda p: trash.remove_file(p, root))
+            if res["deleted"]:
+                deletemarks.drop_deleted(db, [tid])
+            return res
+        r = lib(go)
+        if r is None:
+            return _err(404, "no such track")
+        if r["deleted"]:
+            lib.changed([tid])
+        return JSONResponse({"ok": bool(r["deleted"]), "failed": r["failed"]})
+
     def api_delete_marks(request: Request, user: dict, _b):
         """What this listener marked «на удаление» (a client shows «Снять пометку» for them)."""
         return JSONResponse({"items": lib(lambda db: deletemarks.marked_by(db, user["id"]))})
 
     def api_set_delete_mark(request: Request, user: dict, body: dict):
-        """{kind: track|album, key, on}: ask the owner to delete a track / an album (on=false takes the mark back).
-        Any listener may ask; nothing is deleted here - the owner decides in the desktop app."""
+        """{kind: track|album|artist, key, on}: ask the owner to delete a track / an album / an artist (on=false takes
+        the mark back).  Any listener may ask; nothing is deleted here - the owner decides in the desktop app."""
         kind, key = str(body.get("kind") or ""), str(body.get("key") or "").strip()
         if kind not in deletemarks.KINDS or not key:
-            return _err(400, "kind: track | album, key: required")
+            return _err(400, "kind: track | album | artist, key: required")
         on = body.get("on", True) not in (False, 0, "0", "false")
 
         def go(db: Database):
-            exists = (db.get_track(int(key)) is not None) if kind == "track" and key.isdigit() else \
-                bool(deletemarks.album_tracks(db, key)) if kind == "album" else False
-            if on and not exists:
+            if on and not deletemarks.tracks_of(db, kind, key):
                 return False
             deletemarks.set_mark(db, user["id"], kind, key, on)
             return True
         if not lib(go):
-            return _err(404, "no such track / album")
+            return _err(404, "no such track / album / artist")
         return JSONResponse({"ok": True, "kind": kind, "key": key, "on": on})
 
     def api_hidden(request: Request, user: dict, _b):
@@ -787,23 +960,47 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
         f = lib.covers / f"{key}.jpg"
         if not f.is_file():
             return _err(404, "no such cover")
-        want = _int(request.query_params.get("size"))
-        if want:                                                    # a thumbnail for lists: less traffic and memory
-            size = next((s for s in THUMB_SIZES if s >= want), THUMB_SIZES[-1])
-            thumb = lib.covers / "thumbs" / f"{key}_{size}.jpg"
-            if not thumb.is_file():
-                try:
-                    from PIL import Image
-                    thumb.parent.mkdir(exist_ok=True)
-                    with Image.open(f) as im:
-                        im = im.convert("RGB")
-                        im.thumbnail((size, size), Image.LANCZOS)
-                        im.save(thumb, "JPEG", quality=85)
-                except Exception:  # noqa: BLE001 - a broken picture: give the original
-                    log.exception("cover thumbnail failed")
-                    thumb = f
-            f = thumb
+        f = _thumb(f, key, _int(request.query_params.get("size")))
         return FileResponse(f, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=2592000, immutable"})
+
+    def _thumb(f: Path, key: str, want: int | None) -> Path:
+        """A thumbnail for lists (less traffic and memory), made once in one of THUMB_SIZES."""
+        if not want:
+            return f
+        size = next((s for s in THUMB_SIZES if s >= want), THUMB_SIZES[-1])
+        thumb = lib.covers / "thumbs" / f"{key}_{size}.jpg"
+        if not thumb.is_file():
+            try:
+                from PIL import Image
+                thumb.parent.mkdir(exist_ok=True)
+                with Image.open(f) as im:
+                    im = im.convert("RGB")
+                    im.thumbnail((size, size), Image.LANCZOS)
+                    im.save(thumb, "JPEG", quality=85)
+            except Exception:  # noqa: BLE001 - a broken picture: give the original
+                log.exception("cover thumbnail failed")
+                return f
+        return thumb
+
+    # the artist's picture: its photo (fetched from Deezer in the background on the first ask), meanwhile or without
+    # one the cover of its biggest album; a short cache then, so the photo shows up once it is here
+    photos = artistimg.Fetcher(lib.covers)
+
+    def api_artist_image(request: Request, user: dict, _b):
+        name = request.query_params.get("name") or ""
+        want = _int(request.query_params.get("size"))
+        f = artistimg.cached(lib.covers, name)
+        if f is not None:
+            return FileResponse(_thumb(f, "a" + artistimg.key(name), want), media_type="image/jpeg",
+                                headers={"Cache-Control": "private, max-age=2592000"})
+        photos.want(name)
+        c = lib(lambda db: db.artist_covers(name)).get(name)
+        if not c or not (lib.covers / f"{c}.jpg").is_file():
+            r = _err(404, "no picture")
+            r.headers["Cache-Control"] = "private, max-age=3600"
+            return r
+        return FileResponse(_thumb(lib.covers / f"{c}.jpg", c, want), media_type="image/jpeg",
+                            headers={"Cache-Control": "private, max-age=3600"})
 
     # ---- personal: plays, likes --------------------------------------------------
     def api_plays(request: Request, user: dict, body: dict):
@@ -898,7 +1095,10 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
         exclude = {i for i in (_int(x) for x in body.get("exclude") or []) if i is not None}
         n = _int(body.get("n"), 10, 1, 50)
         plays = lib.guest_plays(user)                          # a guest's wave follows his own listening
-        rows = lib(lambda db: Wave(db, moods, character, genres=genres, plays=plays, user=user["id"]).next_batch(n, exclude))
+        extra = {"langs": [str(x) for x in body.get("langs") or []], "voices": [str(x) for x in body.get("voices") or []],
+                 "seed_track": _int(body.get("seed_track")), "seed_artist": str(body.get("seed_artist") or "") or None}
+        rows = lib(lambda db: Wave(db, moods, character, genres=genres, plays=plays, user=user["id"],
+                                   **extra).next_batch(n, exclude))
         to_json = lib.personal(user)
         return JSONResponse({"items": [to_json(t) for t in rows]})
 
@@ -989,6 +1189,8 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
         Route("/", index),
         Route("/manifest.webmanifest", asset("manifest.webmanifest", "application/manifest+json")),
         Route("/sw.js", asset("sw.js", "text/javascript")),          # at the root: its scope is the whole player
+        Route("/open/{route:path}", open_link),
+        Route("/.well-known/assetlinks.json", assetlinks),
         Route("/api/ping", ping),
         Route("/api/login", login, methods=["POST"]),
         Route("/api/logout", logout, methods=["POST"]),
@@ -996,6 +1198,10 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
         Route("/api/join/{rid}", join_state),
         Route("/api/me", threaded(api_me)),
         Route("/api/me", threaded(api_rename), methods=["POST"]),
+        Route("/api/listeners", threaded(api_listeners)),
+        Route("/api/listeners", threaded(api_add_listener), methods=["POST"]),
+        Route("/api/listeners/{uid}", threaded(api_edit_listener), methods=["POST"]),
+        Route("/api/listeners/{uid}/likes", threaded(api_import_likes), methods=["POST"]),
         Route("/api/info", threaded(api_info)),
         Route("/api/tracks", threaded(api_tracks)),
         Route("/api/tracks/lookup", threaded(api_lookup), methods=["POST"]),
@@ -1009,6 +1215,9 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
         Route("/api/albums", threaded(api_albums)),
         Route("/api/genres", threaded(api_genres)),
         Route("/api/hidden", threaded(api_hidden)),
+        Route("/api/tracks/{tid:int}/trash", threaded(api_trash), methods=["POST"]),
+        Route("/api/sync/pull", threaded(api_sync_pull)),
+        Route("/api/sync/push", threaded(api_sync_push), methods=["POST"]),
         Route("/api/delete-marks", threaded(api_delete_marks)),
         Route("/api/delete-marks", threaded(api_set_delete_mark), methods=["POST"]),
         Route("/api/hidden", threaded(api_set_hidden), methods=["POST"]),
@@ -1019,6 +1228,7 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
         Route("/api/favorites", threaded(api_like), methods=["POST"]),
         Route("/api/stream/{tid:int}", threaded(api_stream), methods=["GET", "HEAD"]),
         Route("/api/cover/{key}", threaded(api_cover)),
+        Route("/api/artist_image", threaded(api_artist_image)),
         Route("/api/plays", threaded(api_plays), methods=["POST"]),
         Route("/api/app/{name}", threaded(api_app)),
         Route("/api/wave/next", threaded(api_wave_next), methods=["POST"]),

@@ -102,7 +102,11 @@ class AlbumsPage(QWidget):
         m = QMenu(self)
         act = m.addAction("♥ Убрать из избранного" if on else "♡ В избранное")
         play = m.addAction("▶ Играть альбом")
+        link = m.addAction("Поделиться (скопировать ссылку)")
         chosen = m.exec(self.grid.viewport().mapToGlobal(pos))
+        if chosen is link:
+            from musicplayer.ui.libraryclient import album_path, copy_share
+            copy_share(self.ctx, self, album_path(artist, album))
         if chosen is act:
             self.ctx.set_liked("album", key, not on)
             self.ctx.events.favorites_changed.emit()

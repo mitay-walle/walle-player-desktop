@@ -16,18 +16,24 @@ HELP = ("Подойдёт текст «Исполнитель — Названи
 
 
 class LikeImportDialog(QDialog):
-    """What was found in the library and what not; «Импортировать» (Enter) adds the found tracks to the likes."""
+    """What was found in the library and what not; «Импортировать» (Enter) adds the found tracks to the likes.
+    ``remote(items, dry_run) -> {matched, unmatched, added}``: the listener lives on the library server, which matches
+    and imports (its track ids are not this copy's)."""
 
-    def __init__(self, ctx, user: dict, path: str, parent=None) -> None:
+    def __init__(self, ctx, user: dict, path: str, parent=None, remote=None) -> None:
         super().__init__(parent)
-        self.ctx, self.user = ctx, user
+        self.ctx, self.user, self.remote = ctx, user, remote
         self.setWindowTitle("Импорт лайков")
         self.setMinimumWidth(560)
-        items = likeimport.parse(likeimport.read_file(path), path)
-        res = likeimport.match(ctx.db, items)
-        self.track_ids = [t["id"] for _, t in res["matched"]]
-        self.added = [i.get("added") for i, _ in res["matched"]]          # dates from the export keep the order
-        self.unmatched = [likeimport.describe(i) for i in res["unmatched"]]
+        self.items = items = likeimport.parse(likeimport.read_file(path), path)
+        if remote is not None:
+            res = remote(items, True)
+            self.track_ids, self.added, self.unmatched = [None] * res["matched"], [], res["unmatched"]
+        else:
+            res = likeimport.match(ctx.db, items)
+            self.track_ids = [t["id"] for _, t in res["matched"]]
+            self.added = [i.get("added") for i, _ in res["matched"]]      # dates from the export keep the order
+            self.unmatched = [likeimport.describe(i) for i in res["unmatched"]]
         who = f"{user['name']} (вы)" if user.get("owner") else user["name"]
         lay = QVBoxLayout(self)
         head = QLabel(f"<b>{Path(path).name}</b>: треков в файле — {len(items)}, найдено в библиотеке — "
@@ -70,22 +76,33 @@ class LikeImportDialog(QDialog):
             Path(path).write_text("\n".join(self.unmatched) + "\n", encoding="utf-8")
 
     def _import(self) -> None:
-        self.count = likeimport.apply(self.ctx.db, self.user, self.track_ids, self.added)
-        self.ctx.events.favorites_changed.emit()
+        if self.remote is not None:
+            try:
+                self.count = self.remote(self.items, False)["added"]
+            except Exception as e:  # noqa: BLE001 - shown to the user
+                QMessageBox.warning(self, "Импорт лайков", f"Сервер не ответил: {e}")
+                return
+        else:
+            self.count = likeimport.apply(self.ctx.db, self.user, self.track_ids, self.added)
+            self.ctx.events.favorites_changed.emit()
         self.accept()
 
 
-def import_likes(ctx, user: dict | None, parent=None) -> int:
-    """Pick a file, show what matched, import on «Импортировать»; returns how many likes were added."""
+def import_likes(ctx, user: dict | None, parent=None, remote=None) -> int:
+    """Pick a file, show what matched, import on «Импортировать»; returns how many likes were added.
+    ``remote``: see LikeImportDialog (a listener of the library server)."""
     if not user:
         return 0
     path, _ = QFileDialog.getOpenFileName(parent, f"Импорт лайков — {user['name']}", "", FILTER)
     if not path:
         return 0
     try:
-        dlg = LikeImportDialog(ctx, user, path, parent)
+        dlg = LikeImportDialog(ctx, user, path, parent, remote)
     except OSError as e:
         QMessageBox.warning(parent, "Импорт лайков", f"Файл не прочитан: {e}")
+        return 0
+    except Exception as e:  # noqa: BLE001 - the server did not answer
+        QMessageBox.warning(parent, "Импорт лайков", f"Сервер не ответил: {e}")
         return 0
     if dlg.exec() == QDialog.DialogCode.Accepted:
         return dlg.count
