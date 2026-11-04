@@ -21,8 +21,15 @@ from musicplayer.ui.theme import TOKENS
 log = logging.getLogger(__name__)
 
 
+MARGIN = 12                                # «Другие устройства»: the same outer margin on every side
+
+
 class Line(QLabel):
     """A message line that takes no room while it is empty (the dialogs stay compact)."""
+
+    def __init__(self, text: str = "") -> None:
+        super().__init__()
+        self.setText(text)
 
     def setText(self, text: str) -> None:
         super().setText(text)
@@ -403,78 +410,80 @@ class JoinDialog(QDialog):
 
 
 class ShareDialog(QDialog):
-    def __init__(self, sharing: RemoteSharing, parent=None, embedded: bool = False) -> None:
-        """``embedded``: a tab of the server's «Другие устройства» (no own «Закрыть»)."""
+    def __init__(self, sharing: RemoteSharing, parent=None) -> None:
         super().__init__(parent)
         self.sharing = sharing
         self.setWindowTitle("Другие устройства — библиотека на этом компьютере")
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(MARGIN, MARGIN, MARGIN, MARGIN)
         lay.setSpacing(8)
-        self.enable = QCheckBox("Открыть для других устройств")
-        self.enable.setToolTip("Телефоны и другие компьютеры слушают библиотеку этого компьютера. Пока она открыта, "
+        self.enable = QCheckBox("Открыть")
+        self.enable.setToolTip("Открыть библиотеку для других устройств: телефоны и другие компьютеры слушают библиотеку этого компьютера. Пока она открыта, "
                                "закрытие окна сворачивает Walle Player в трей; выйти — «Выход» в меню значка")
-        lay.addWidget(self.enable)
 
         body = QHBoxLayout()
         self.qr = QLabel()
-        self.qr.setFixedSize(200, 200)
+        self.qr.setFixedSize(176, 176)
         self.qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.qr.setStyleSheet(f"background:{TOKENS['surface2']}; border-radius:12px;")
-        body.addWidget(self.qr)
-        right = QVBoxLayout()
+        body.addWidget(self.qr, 0, Qt.AlignmentFlag.AlignTop)
+        right = self._right = QVBoxLayout()
         nrow = QHBoxLayout()
         self.user = QComboBox()
         self.user.setToolTip("Слушатель: свои лайки и история")
-        nrow.addWidget(self.user, 1)
+        self.user.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        nrow.addWidget(self.user)
         self.btn_ren = QPushButton()
         make_icon_button(self.btn_ren, "edit", TOKENS["text"], 20, "Переименовать")
         self.btn_add = QPushButton()
         make_icon_button(self.btn_add, "plus", TOKENS["text"], 20, "Добавить слушателя: свой QR, свои лайки и история")
         self.btn_del = QPushButton()
         make_icon_button(self.btn_del, "trash", TOKENS["text"], 20, "Удалить слушателя")
-        for b in (self.btn_ren, self.btn_add, self.btn_del):
+        self.btn_likes = QPushButton()
+        make_icon_button(self.btn_likes, "import", TOKENS["text"], 20,
+                         "Импорт лайков этого слушателя из файла: «Исполнитель — Название», CSV, JSON или M3U")
+        for b in (self.btn_ren, self.btn_likes, self.btn_del, self.btn_add):
             nrow.addWidget(b)
+        nrow.addStretch(1)
         right.addLayout(nrow)
         self.can_label = QCheckBox("Может размечать")
         self.can_label.setToolTip("Настроения и жанры: это учит вашу модель настроений")
-        lrow = QHBoxLayout()
-        lrow.addWidget(self.can_label, 1)
-        self.btn_likes = QPushButton()
-        make_icon_button(self.btn_likes, "import", TOKENS["text"], 20,
-                         "Импорт лайков из файла: «Исполнитель — Название», CSV, JSON или M3U")
-        lrow.addWidget(self.btn_likes)
-        right.addLayout(lrow)
+        right.addWidget(self.can_label)
         self.which = QComboBox()
         self.which.setToolTip("Адрес в QR-коде и ссылке")
+        self.which.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         wrow = QHBoxLayout()
-        wrow.addWidget(self.which, 1)
+        wrow.addWidget(self.which)
         self.btn_copy = QPushButton()
         make_icon_button(self.btn_copy, "copy", TOKENS["text"], 20,
                          "Скопировать ссылку (в ней личный ключ слушателя — не публикуйте её)")
         wrow.addWidget(self.btn_copy)
+        wrow.addStretch(1)
         right.addLayout(wrow)
         krow = QHBoxLayout()
         self.key = QLabel()
         self.key.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.key.setStyleSheet(f"color:{TOKENS['text_muted']}; font-family:Consolas, monospace;")
         self.key.setToolTip("Ключ слушателя")
-        krow.addWidget(self.key, 1)
+        krow.addWidget(self.key)
         self.btn_key = QPushButton()
-        make_icon_button(self.btn_key, "refresh", TOKENS["text"], 20,
+        make_icon_button(self.btn_key, "key", TOKENS["text"], 20,
                          "Сменить ключ: устройства этого слушателя отключатся, остальные — нет")
         krow.addWidget(self.btn_key)
+        krow.addStretch(1)
         right.addLayout(krow)
         right.addStretch(1)
         body.addLayout(right, 1)
         lay.addLayout(body)
 
-        jrow = QHBoxLayout()
-        self.allow_join = QCheckBox("Запросы доступа")
+        jrow = QHBoxLayout()                   # every switch in one row, right of the QR code
+        jrow.addWidget(self.enable)
+        self.allow_join = QCheckBox("Запросы")
         self.allow_join.setToolTip("Новые устройства из домашней сети просят доступ по имени, без QR — вы разрешаете здесь")
         self.allow_join.setChecked(sharing.cfg.allow_join)
         self.allow_join.toggled.connect(sharing.set_allow_join)
-        self.join_internet = QCheckBox("и из интернета")
-        self.join_internet.setToolTip("Обычно незачем: из интернета кто угодно может засыпать вас запросами. "
+        self.join_internet = QCheckBox("из интернета")
+        self.join_internet.setToolTip("Запросы доступа и из интернета. Обычно незачем: из интернета кто угодно может засыпать вас запросами. "
                                       "Новых слушателей проще добавить дома или по QR")
         self.join_internet.setChecked(sharing.cfg.join_from_internet)
         self.join_internet.setEnabled(sharing.cfg.allow_join)
@@ -483,17 +492,18 @@ class ShareDialog(QDialog):
         jrow.addWidget(self.allow_join)
         jrow.addWidget(self.join_internet)
         from musicplayer.ui import tray
-        self.autostart = QCheckBox("Запуск с Windows")
-        self.autostart.setToolTip("В трее, библиотека сразу открыта для устройств" if tray.autostart_supported()
+        self.autostart = QCheckBox("С Windows")
+        self.autostart.setToolTip("Запускать вместе с Windows: в трее, библиотека сразу открыта для устройств" if tray.autostart_supported()
                                   else "Работает в собранной программе (WallePlayer.exe)")
         self.autostart.setChecked(tray.autostart_enabled())
         self.autostart.setEnabled(tray.autostart_supported() or tray.autostart_enabled())
         self.autostart.toggled.connect(lambda on: self.autostart.setChecked(tray.set_autostart(on) == on and on))
-        jrow.addStretch(1)
         jrow.addWidget(self.autostart)
-        lay.addLayout(jrow)
-
-        lay.addWidget(self._internet_box(sharing))
+        jrow.addStretch(1)
+        right.insertLayout(0, jrow)
+        net = self._internet_box(sharing)
+        right.insertLayout(right.count() - 1, self.net_head)   # the internet mode under the key, before the stretch
+        lay.addWidget(net)
         nrow = QHBoxLayout()
         self.btn_tunnel = QPushButton()
         self.btn_tunnel.setToolTip("Временный адрес Cloudflare для доступа из интернета (в России работает ненадёжно)")
@@ -537,11 +547,6 @@ class ShareDialog(QDialog):
         self.status = Line()
         self.status.setWordWrap(True)
         lay.addWidget(self.status)
-        if not embedded:
-            close = QPushButton("Закрыть")
-            close.setToolTip("Закрыть окно")
-            close.clicked.connect(self.accept)
-            lay.addWidget(close, 0, Qt.AlignmentFlag.AlignRight)
 
         self.enable.toggled.connect(self._toggle)
         self.user.currentIndexChanged.connect(lambda _i: self._show_user())
@@ -698,11 +703,19 @@ class ShareDialog(QDialog):
         self.clients.setText("Онлайн: " + ", ".join(dict.fromkeys(c["user"] for c in cl)))
         self.clients.setToolTip("<br>".join(rows))
 
+    def _fit_qr(self) -> int:
+        """The QR code takes exactly the height of the controls right of it; returns its side."""
+        self._right.invalidate()                 # a line just shown or hidden: not the cached height
+        side = max(120, self._right.sizeHint().height())
+        self.qr.setFixedSize(side, side)
+        return side
+
     def current_link(self) -> str | None:
         u, base = self.selected_user(), self.which.currentData()
         return RemoteServer.pair_url(base, u) if u and base else None
 
     def _show_qr(self) -> None:
+        side = self._fit_qr() - 8
         url = self.current_link()
         u = self.selected_user()
         self.key.setText(u["token"] if u else "")
@@ -710,7 +723,7 @@ class ShareDialog(QDialog):
         if not url:
             self.qr.setPixmap(QPixmap())
             return
-        self.qr.setPixmap(qr_pixmap(url).scaled(192, 192, Qt.AspectRatioMode.KeepAspectRatio,
+        self.qr.setPixmap(qr_pixmap(url).scaled(side, side, Qt.AspectRatioMode.KeepAspectRatio,
                                                 Qt.TransformationMode.FastTransformation))
 
     # ---- «Из интернета»: the way phones reach the computer from outside -------------------------------------------
@@ -721,21 +734,21 @@ class ShareDialog(QDialog):
         box = QWidget()
         v = QVBoxLayout(box)
         v.setContentsMargins(0, 6, 0, 0)
-        head = QHBoxLayout()
+        head = self.net_head = QHBoxLayout()   # placed right of the QR code by __init__
         self.net_mode = QComboBox()
         self.net_mode.setToolTip("Доступ из интернета. Для мобильного интернета нужен статический IP у провайдера или "
                                  "свой небольшой сервер VPS; подробнее — docs/internet-access.md")
         for key, label in self.MODES:
             self.net_mode.addItem(label, key)
         self.net_mode.setCurrentIndex(max(0, self.net_mode.findData(sh.cfg.net_mode)))
-        head.addWidget(self.net_mode, 1)
+        head.addWidget(self.net_mode)
         self.btn_check = QPushButton()
         make_icon_button(self.btn_check, "check", TOKENS["text"], 20,
                          "Проверить, открывается ли сервер по внешнему адресу (запрос с этого компьютера; для "
                          "статического IP надёжнее проверить с телефона без Wi-Fi)")
         self.btn_check.clicked.connect(self._check_public)
         head.addWidget(self.btn_check)
-        v.addLayout(head)
+        head.addStretch(1)
         self.net_pages = QStackedWidget()
 
         off = QWidget()

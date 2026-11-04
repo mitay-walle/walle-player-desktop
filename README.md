@@ -101,7 +101,7 @@ API (и контракт для мобильного приложения): [doc
 ## Тесты и сборка
 
 ```
-python -m pytest                                   # ядро + GUI (offscreen)
+python -m pytest -n auto                           # ядро + GUI (offscreen), параллельно
 .venv\Scripts\pyinstaller musicplayer.spec --noconfirm   # dist\WallePlayer\WallePlayer.exe
 python scripts\test_build.py                       # запускает exe и проходит весь сценарий по MCP
 python scripts\e2e_demo.py                         # живое демо на запущенном приложении (песочница данных!)

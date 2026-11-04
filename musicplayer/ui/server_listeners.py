@@ -11,11 +11,11 @@ from urllib.parse import quote
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QGuiApplication, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QHBoxLayout, QInputDialog, QLabel, QMessageBox,
-                               QPushButton, QStackedWidget, QTabBar, QVBoxLayout, QWidget)
+                               QLayout, QPushButton, QStackedWidget, QTabBar, QVBoxLayout, QWidget)
 
 from musicplayer.server.runner import RemoteServer
 from musicplayer.ui.icons import make_icon_button
-from musicplayer.ui.share_dialog import Line, qr_pixmap
+from musicplayer.ui.share_dialog import MARGIN, Line, qr_pixmap
 from musicplayer.ui.theme import TOKENS
 
 
@@ -33,79 +33,89 @@ class ServerListenersDialog(QDialog):
         self.state: dict = {}
         self.setWindowTitle("Другие устройства — библиотека на сервере")
         outer = QVBoxLayout(self)
+        outer.setContentsMargins(MARGIN, MARGIN, MARGIN, MARGIN)   # the same on every side
         self.tabs = QTabBar()              # a bar + a stack (not QTabWidget): the window takes the shown tab's size
         self.tabs.setDrawBase(False)
         self.tabs.setExpanding(False)
         self.pages = QStackedWidget()
-        outer.addWidget(self.tabs)
+        trow = QHBoxLayout()
+        trow.addWidget(self.tabs)
+        trow.addStretch(1)
+        self.btn_reload = QPushButton()
+        make_icon_button(self.btn_reload, "refresh", TOKENS["text"], 20,
+                         "Обновить: заново получить слушателей и подключённые устройства с сервера")
+        trow.addWidget(self.btn_reload)
+        outer.addLayout(trow)
         outer.addWidget(self.pages)
         page = QWidget()
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(0, 6, 0, 0)
+        lay.setContentsMargins(0, 8, 0, 0)
         self.tabs.addTab("Сервер")
         self.tabs.setTabToolTip(0, "Слушатели сервера библиотеки")
         self.pages.addWidget(page)
         self.local = None                 # «Этот компьютер»: the library server of this computer (the old dialog)
         if sharing is not None:
             from musicplayer.ui.share_dialog import ShareDialog
-            self.local = ShareDialog(sharing, embedded=True)
+            self.local = ShareDialog(sharing)
             self.local.setWindowFlags(Qt.WindowType.Widget)
-            self.local.layout().setContentsMargins(0, 6, 0, 0)
+            self.local.layout().setContentsMargins(0, 8, 0, 0)
+            self.local.layout().setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)   # a window's minimum
+            self.local.setMinimumSize(0, 0)      # would keep the server's tab as wide as this one
             self.tabs.addTab("Этот компьютер")
             self.tabs.setTabToolTip(1, "Сервер на этом компьютере: открыть библиотеку для устройств отсюда")
             self.pages.addWidget(self.local)
         self.tabs.setVisible(self.local is not None)
         body = QHBoxLayout()
         self.qr = QLabel()
-        self.qr.setFixedSize(200, 200)
+        self.qr.setFixedSize(176, 176)
         self.qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.qr.setStyleSheet(f"background:{TOKENS['surface2']}; border-radius:12px;")
-        body.addWidget(self.qr)
-        right = QVBoxLayout()
+        body.addWidget(self.qr, 0, Qt.AlignmentFlag.AlignTop)
+        right = self._right = QVBoxLayout()
         nrow = QHBoxLayout()
         self.user = QComboBox()
         self.user.setToolTip("Слушатель: свои лайки и история")
-        nrow.addWidget(self.user, 1)
+        self.user.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        nrow.addWidget(self.user)
         self.btn_ren = QPushButton()
         make_icon_button(self.btn_ren, "edit", TOKENS["text"], 20, "Переименовать")
         self.btn_add = QPushButton()
         make_icon_button(self.btn_add, "plus", TOKENS["text"], 20, "Добавить слушателя: свой QR, свои лайки и история")
         self.btn_del = QPushButton()
         make_icon_button(self.btn_del, "trash", TOKENS["text"], 20, "Удалить слушателя")
-        for b in (self.btn_ren, self.btn_add, self.btn_del):
+        self.btn_likes = QPushButton()
+        make_icon_button(self.btn_likes, "import", TOKENS["text"], 20,
+                         "Импорт лайков этого слушателя из файла: «Исполнитель — Название», CSV, JSON или M3U")
+        for b in (self.btn_ren, self.btn_likes, self.btn_del, self.btn_add):
             nrow.addWidget(b)
+        nrow.addStretch(1)
         right.addLayout(nrow)
         self.can_label = QCheckBox("Может размечать")
         self.can_label.setToolTip("Настроения и жанры: это учит вашу модель настроений")
-        lrow = QHBoxLayout()
-        lrow.addWidget(self.can_label, 1)
-        self.btn_likes = QPushButton()
-        make_icon_button(self.btn_likes, "import", TOKENS["text"], 20,
-                         "Импорт лайков из файла: «Исполнитель — Название», CSV, JSON или M3U")
-        lrow.addWidget(self.btn_likes)
-        right.addLayout(lrow)
+        right.addWidget(self.can_label)
         self.which = QComboBox()
         self.which.setToolTip("Адрес в QR-коде и ссылке")
         self.which.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         wrow = QHBoxLayout()
-        wrow.addWidget(self.which, 1)
+        wrow.addWidget(self.which)
         self.btn_copy = QPushButton()
         make_icon_button(self.btn_copy, "copy", TOKENS["text"], 20,
                          "Скопировать ссылку (в ней личный ключ слушателя — не публикуйте её)")
         wrow.addWidget(self.btn_copy)
+        wrow.addStretch(1)
         right.addLayout(wrow)
         krow = QHBoxLayout()
         self.key = QLabel()
         self.key.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.key.setStyleSheet(f"color:{TOKENS['text_muted']}; font-family:Consolas, monospace;")
         self.key.setToolTip("Ключ слушателя")
-        krow.addWidget(self.key, 1)
+        krow.addWidget(self.key)
         self.btn_key = QPushButton()
-        make_icon_button(self.btn_key, "refresh", TOKENS["text"], 20,
+        make_icon_button(self.btn_key, "key", TOKENS["text"], 20,
                          "Сменить ключ: устройства этого слушателя отключатся, остальные — нет")
         krow.addWidget(self.btn_key)
+        krow.addStretch(1)
         right.addLayout(krow)
-        right.addStretch(1)
         self.clients = Line()
         self.clients.setWordWrap(True)
         self.clients.setStyleSheet(f"color:{TOKENS['text_muted']};")
@@ -113,18 +123,10 @@ class ServerListenersDialog(QDialog):
         self.status = Line()
         self.status.setWordWrap(True)
         right.addWidget(self.status)
+        right.addStretch(1)
         body.addLayout(right, 1)
         lay.addLayout(body)
 
-        brow = QHBoxLayout()
-        self.btn_reload = QPushButton("Обновить")
-        self.btn_reload.setToolTip("Заново получить слушателей и подключённые устройства с сервера")
-        close = QPushButton("Закрыть")
-        close.setToolTip("Закрыть окно")
-        brow.addStretch(1)
-        brow.addWidget(self.btn_reload)
-        brow.addWidget(close)
-        outer.addLayout(brow)
         self.tabs.currentChanged.connect(self._tab_changed)
         self._tab_changed(0)
 
@@ -138,8 +140,8 @@ class ServerListenersDialog(QDialog):
         self.btn_copy.clicked.connect(self._copy)
         self.btn_key.clicked.connect(self._new_key)
         self.btn_reload.clicked.connect(self.load)
-        close.clicked.connect(self.accept)
         self._show_user()
+        self._fit_qr()
         self.load()
 
     # ---- talking to the server (in the background: through the VPS it takes a moment) ------------------------------
@@ -163,6 +165,9 @@ class ServerListenersDialog(QDialog):
                     self._apply(res, select)
                     self.status.setText(done)
                     self.status.setToolTip("")
+                    self._fit_qr()                       # the status line may have come or gone
+                    if self.pages.currentIndex() == 0:
+                        self.adjustSize()
                 except RuntimeError:                   # the dialog was closed meanwhile
                     pass
             QTimer.singleShot(0, self, show)
@@ -227,11 +232,19 @@ class ServerListenersDialog(QDialog):
         self.can_label.blockSignals(False)
         self._show_qr()
 
+    def _fit_qr(self) -> int:
+        """The QR code takes exactly the height of the controls right of it; returns its side."""
+        self._right.invalidate()                 # a line just shown or hidden: not the cached height
+        side = max(120, self._right.sizeHint().height())
+        self.qr.setFixedSize(side, side)
+        return side
+
     def current_link(self) -> str | None:
         u, base = self.selected_user(), self.which.currentData()
         return RemoteServer.pair_url(base, u) if u and base and u.get("token") else None
 
     def _show_qr(self) -> None:
+        side = self._fit_qr() - 8
         url = self.current_link()
         self.btn_copy.setEnabled(bool(url))
         u = self.selected_user()
@@ -239,7 +252,7 @@ class ServerListenersDialog(QDialog):
         if not url:
             self.qr.setPixmap(QPixmap())
             return
-        self.qr.setPixmap(qr_pixmap(url).scaled(192, 192, Qt.AspectRatioMode.KeepAspectRatio,
+        self.qr.setPixmap(qr_pixmap(url).scaled(side, side, Qt.AspectRatioMode.KeepAspectRatio,
                                                 Qt.TransformationMode.FastTransformation))
 
     # ---- actions --------------------------------------------------------------------------------------------------------
