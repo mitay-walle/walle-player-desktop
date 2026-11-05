@@ -8,7 +8,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from musicplayer.ui.context import AppContext
-from musicplayer.ui.pages.library import TRASH_CSS, EraChips, FlagChips, GenreChips, LangVocalChips, MoodChips, confirm_trash
+from musicplayer.ui import deleteactions
+from musicplayer.ui.pages.library import TRASH_CSS, EraChips, FlagChips, GenreChips, LangVocalChips, MoodChips
 from musicplayer.ui.theme import TOKENS
 
 
@@ -27,8 +28,9 @@ class TagPopup(QFrame):
         self.lv = LangVocalChips()
         self.genres = GenreChips()
         self.era = EraChips()
-        self.btn_trash = QPushButton("🗑 Удалить файл…  (Del)")
+        self.btn_trash = QPushButton("🗑 На удаление  (Del)")
         self.btn_trash.setStyleSheet(TRASH_CSS)
+        self.btn_trash.setToolTip(deleteactions.TIP)
         lay = QVBoxLayout(self)
         lay.setSpacing(4)
         head = QHBoxLayout()                           # title, and the delete button apart in the corner
@@ -109,7 +111,7 @@ class TagPopup(QFrame):
 
     def _trash(self) -> None:
         t = self.ctx.db.get_track(self.tid) if self.tid is not None else None
-        if t and confirm_trash(self, self.ctx, [t]):
+        if t and deleteactions.toggle(self.ctx, self, [t]):
             self.hide()
 
     def _external(self, ids) -> None:
@@ -135,7 +137,8 @@ class TagPopup(QFrame):
         self.btn_copy.setEnabled(t is not None)
         self.btn_paste.setEnabled(bool(tracks) and clip is not None)
         self.btn_paste.setToolTip(labelclip.describe(clip))
-        self.btn_trash.setVisible(not self.group)          # a whole album is never deleted from here
+        self.btn_trash.setVisible(not self.group)          # a whole album is never marked from here
+        self.btn_trash.setText(f"🗑 {deleteactions.label(self.ctx, tracks)}  (Del)")
         self.genres.show_state(tracks)
         self.era.show_state(tracks)
 

@@ -429,7 +429,7 @@ class MainWindow(QMainWindow):
         self.btn_marks = QPushButton()                   # what listeners marked «на удаление» (shown when there is any)
         self.btn_marks.setIcon(icon("trash", TOKENS["danger"], 20))
         self.btn_marks.setIconSize(QSize(20, 20))
-        self.btn_marks.setToolTip("Треки и альбомы, которые слушатели пометили на удаление: удалить или оставить")
+        self.btn_marks.setToolTip("Помеченное на удаление (вами и слушателями): удалить файлы или оставить")
         self.btn_marks.hide()
         sv.addWidget(self.btn_marks)
         self.btn_quality = QPushButton()                 # the nightly sound check found bad files (shown when any)

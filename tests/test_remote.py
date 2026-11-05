@@ -177,6 +177,11 @@ def test_wave_rate_teaches_the_model(client, lib):
     items = client.post("/api/wave/next", json={"moods": ["Весёлое"], "n": 5}, headers=AUTH).json()["items"]
     kinds = {t["id"]: t["wave"]["kind"] for t in items}
     assert kinds == {lib.ids[0]: "known", lib.ids[1]: "guess"}
+    # «heard» on the phone (skipped ones too): accepted, junk entries ignored, the wave still answers
+    again = client.post("/api/wave/next", json={"moods": ["Весёлое"], "n": 5,
+                                                "heard": [[lib.ids[0], 30], ["x", 1], [lib.ids[1]], "junk"]},
+                        headers=AUTH)
+    assert again.status_code == 200 and {t["id"] for t in again.json()["items"]} == set(kinds)
     r = client.post("/api/wave/rate", json={"id": lib.ids[1], "verdict": "like", "kind": "guess", "moods": ["Весёлое"]},
                     headers=AUTH).json()
     assert r == {"result": "confirmed", "moods": ["Весёлое"]}

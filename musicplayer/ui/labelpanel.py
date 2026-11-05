@@ -10,6 +10,7 @@ from __future__ import annotations
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from musicplayer.ui import deleteactions
 from musicplayer.ui.pages.library import TRASH_CSS, EraChips, FlagChips, GenreChips, LangVocalChips, MoodChips
 from musicplayer.ui.theme import TOKENS
 
@@ -39,9 +40,9 @@ class LabelPanel(QWidget):
         self.btn_artist.setToolTip("Отмеченное — всем трекам исполнителя, снятое — снять у всех")
         self.btn_cancel = QPushButton("Отмена")
         self.btn_cancel.setToolTip("Вернуть метки, какие у трека сейчас")
-        self.btn_delete = QPushButton("Удалить трек…")
+        self.btn_delete = QPushButton("На удаление")
         self.btn_delete.setStyleSheet(TRASH_CSS)
-        self.btn_delete.setToolTip("Файл — в корзину Windows (спросит перед удалением)")
+        self.btn_delete.setToolTip(deleteactions.TIP)
         self.state = QLabel()
         self.state.setStyleSheet(f"color:{TOKENS['text_muted']}; font-size:12px;")
         row = QHBoxLayout()
@@ -117,6 +118,7 @@ class LabelPanel(QWidget):
         self.btn_track.setEnabled(t is not None and self.dirty())
         self.btn_cancel.setEnabled(t is not None and self.dirty())
         self.btn_delete.setEnabled(t is not None)
+        self.btn_delete.setText(deleteactions.label(self.ctx, [t] if t is not None else []))
         self.state.setText("есть неприменённые изменения" if t is not None and self.dirty() else "")
 
     def _groups(self) -> tuple[list[dict], list[dict]]:
@@ -163,6 +165,6 @@ class LabelPanel(QWidget):
         self.load(self.track)
 
     def delete(self) -> None:
-        from musicplayer.ui.pages.library import confirm_trash
-        if self.track is not None and confirm_trash(self, self.ctx, [self.track]):
-            self.load(self.ctx.player.current)
+        if self.track is not None:
+            deleteactions.toggle(self.ctx, self, [self.track])
+            self._render()

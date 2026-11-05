@@ -9,6 +9,7 @@ from PySide6.QtCore import QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from musicplayer.ui import deleteactions
 from musicplayer.ui.context import AppContext
 from musicplayer.ui.icons import icon, make_icon_button
 from musicplayer.ui.theme import TOKENS
@@ -55,7 +56,7 @@ class MiniPlayer(QWidget):
         self.btn_like, self.btn_tags, self.btn_trash = QPushButton(), QPushButton(), QPushButton()
         make_icon_button(self.btn_like, "heart", TOKENS["text_muted"], 18, "В избранное")
         make_icon_button(self.btn_tags, "tag", TOKENS["text_muted"], 18, "Метки трека, альбома или исполнителя")
-        make_icon_button(self.btn_trash, "trash", TOKENS["text_muted"], 18, "Удалить трек… (в корзину Windows, спросит)")
+        make_icon_button(self.btn_trash, "trash", TOKENS["text_muted"], 18, deleteactions.TIP)
         for b in (self.btn_like, self.btn_tags, self.btn_trash):
             b.setFixedSize(30, 30)
         self.btn_vol = QPushButton()                              # click: a vertical volume slider pops up
@@ -186,10 +187,9 @@ class MiniPlayer(QWidget):
             super().wheelEvent(e)
 
     def trash(self) -> None:
-        from musicplayer.ui.pages.library import confirm_trash
         t = self.ctx.player.current
         if t is not None:
-            confirm_trash(self, self.ctx, [t])
+            deleteactions.toggle(self.ctx, self, [t])
 
     def _show_title(self) -> None:
         """Bold title and the muted artist on one line, shortened with «…» to the room there is."""

@@ -412,6 +412,7 @@ def test_trash_confirmation_answers_enter_and_escape(qtbot, app, library, monkey
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication
     from musicplayer.core import trash
+    from musicplayer.ui.pages.library import confirm_trash
     from musicplayer.ui.tagpopup import TagPopup
     ctx, win = app
     win.start_scan(str(library))
@@ -430,7 +431,7 @@ def test_trash_confirmation_answers_enter_and_escape(qtbot, app, library, monkey
     for key, deleted in ((Qt.Key.Key_Escape, 0), (Qt.Key.Key_Return, 1)):
         pop.open_for(t, win.player_bar.btn_tags)
         QTimer.singleShot(150, lambda k=key: answer(k))
-        pop._trash()
+        confirm_trash(pop, ctx, [t])
         assert len(calls) == deleted
     assert seen == [(True, False), (True, False)]
 
@@ -718,10 +719,10 @@ def test_wave_resumes_after_library_playback(qtbot, app, library):
     assert wave.active and ctx.player.current["id"] == wave_track
 
 
-def test_delete_key_asks_and_recycles(qtbot, app, library, monkeypatch):
+def test_delete_key_puts_on_the_delete_list_and_takes_off(qtbot, app, library, monkeypatch):
+    """Delete (and the 🗑 button) marks «На удаление» like the phones do; the files go only from that list."""
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QMessageBox
-    from musicplayer.core import trash
+    from musicplayer.core import deletemarks, trash
     ctx, win = app
     win.start_scan(str(library))
     wait_job(qtbot, ctx)
@@ -733,12 +734,14 @@ def test_delete_key_asks_and_recycles(qtbot, app, library, monkeypatch):
     tid = lib.view.selected_ids()[0]
     gone = []
     monkeypatch.setattr(trash, "to_recycle_bin", lambda p: gone.append(p) or True)
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: (box.defaultButton().click(), 0)[1])   # «Удалить» (Enter)
     win.activateWindow()
     qtbot.waitUntil(lambda: win.isActiveWindow(), timeout=3000)
     lib.view.setFocus()
     qtbot.keyClick(lib.view, Qt.Key.Key_Delete)
-    assert gone and tid not in [r["id"] for r in ctx.db.search(limit=100)]
+    assert deletemarks.marked_by(ctx.db, "owner") == [{"kind": "track", "key": str(tid)}] and not gone
+    assert "Снять пометку" in lib.btn_trash.text() and win.btn_marks.isVisible()
+    qtbot.keyClick(lib.view, Qt.Key.Key_Delete)                              # again: off the list
+    assert deletemarks.marked_by(ctx.db, "owner") == [] and "На удаление" in lib.btn_trash.text()
 
 
 def test_delete_keeps_the_shown_list_and_selects_the_next_track(qtbot, app, library, monkeypatch):
@@ -762,10 +765,8 @@ def test_delete_keeps_the_shown_list_and_selects_the_next_track(qtbot, app, libr
     ctx.events.library_changed.connect(lambda: reloads.append(True))
     monkeypatch.setattr(trash, "to_recycle_bin", lambda p: True)
     monkeypatch.setattr(QMessageBox, "exec", lambda box: (box.defaultButton().click(), 0)[1])
-    win.activateWindow()
-    qtbot.waitUntil(lambda: win.isActiveWindow(), timeout=3000)
-    lib.view.setFocus()
-    qtbot.keyClick(lib.view, Qt.Key.Key_Delete)
+    from musicplayer.ui.pages.library import confirm_trash
+    assert confirm_trash(lib, ctx, list(lib._selection))                  # deleted from «На удаление»
     assert [r["id"] for r in lib.model.rows] == [second]             # the album is still shown, one row less
     assert lib.count_label.text() == "Альбом «Группа крови»: 1"
     assert lib.view.selected_ids() == [second] and not reloads

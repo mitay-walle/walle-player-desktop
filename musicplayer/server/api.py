@@ -1097,7 +1097,12 @@ def build_app(lib: Library, access: Access, info: dict | None = None) -> Starlet
         plays = lib.guest_plays(user)                          # a guest's wave follows his own listening
         extra = {"langs": [str(x) for x in body.get("langs") or []], "voices": [str(x) for x in body.get("voices") or []],
                  "seed_track": _int(body.get("seed_track")), "seed_artist": str(body.get("seed_artist") or "") or None}
-        rows = lib(lambda db: Wave(db, moods, character, genres=genres, plays=plays, user=user["id"],
+        now = time.time()
+        heard = {}                                             # [[id, seconds ago], ...]: started on the phone, skipped too
+        for x in (body.get("heard") or [])[:2000]:
+            if isinstance(x, list) and len(x) == 2 and _int(x[0]) is not None and isinstance(x[1], (int, float)):
+                heard[_int(x[0])] = now - max(float(x[1]), 0.0)
+        rows = lib(lambda db: Wave(db, moods, character, genres=genres, plays=plays, user=user["id"], heard=heard,
                                    **extra).next_batch(n, exclude))
         to_json = lib.personal(user)
         return JSONResponse({"items": [to_json(t) for t in rows]})

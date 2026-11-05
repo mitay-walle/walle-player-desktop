@@ -11,6 +11,7 @@ one artist - the closest tracks by sound and tags (core/similar.py), the moods a
 
 from __future__ import annotations
 
+import math
 import random
 import time
 
@@ -19,7 +20,7 @@ from .db import Database, rare_weights
 CHARACTERS = {"favorite": "Любимое", "unfamiliar": "Незнакомое", "mixed": "Вперемешку", "weak": "Плохо размеченное"}
 VOICES = {"voc": "С вокалом", "inst": "Без слов", "female": "Женский вокал", "male": "Мужской вокал",
           "raspy": "Хриплый вокал"}
-RECENT_SEC = 2 * 3600
+RECENT_DAYS = 3.0                                       # «not again so soon»: a track heard d days ago weighs 1-e^(-d/3)
 RADIO_TOP = 300                                         # a radio plays among the closest tracks only
 RADIO_TTL = 600.0
 _radio_cache: dict[tuple, tuple[float, dict[int, float]]] = {}
@@ -94,16 +95,28 @@ def lang_fits(t: dict, langs: set[str]) -> bool:
     return lang in langs or ("foreign" in langs and lang != "ru")
 
 
+def recency(last_played: float | None, now: float) -> float:
+    """How welcome a track is again: 0.02 just heard, ~0.3 a day later, ~0.6 after three days, ~0.9 after a week;
+    never heard - 1. (Only a 2-hour pause before: what was heard yesterday came back as often as anything else.)"""
+    if not last_played:
+        return 1.0
+    days = max(now - last_played, 0.0) / 86400
+    return max(0.02, 1.0 - math.exp(-days / RECENT_DAYS))
+
+
 class Wave:
     def __init__(self, db: Database, moods: list[str] | None = None, character: str = "mixed",
                  min_conf: float = 0.55, explore: float = 0.3, rng: random.Random | None = None,
                  genres: list[str] | None = None, plays: dict[int, tuple[int, float | None]] | None = None,
                  user: str | None = "owner", langs: list[str] | None = None, voices: list[str] | None = None,
-                 seed_track: int | None = None, seed_artist: str | None = None) -> None:
+                 seed_track: int | None = None, seed_artist: str | None = None,
+                 heard: dict[int, float] | None = None) -> None:
         """``plays``: {track id: (count, last played)} of another listener (a guest on a phone): favourite/unfamiliar
         and «not again so soon» then follow HIS listening, not the catalogue's.  ``langs``: lyrics languages
         (core/langvocal.py LANGS, "foreign" = not Russian); ``voices``: VOICES keys.  ``seed_track`` /
-        ``seed_artist``: a radio from that track / artist instead of moods."""
+        ``seed_artist``: a radio from that track / artist instead of moods.  ``heard``: {track id: when it started
+        playing} on the listener's device - skipped ones too (a play counts only after half the track), so a wave
+        started anew does not bring back what was just skipped."""
         self.db = db
         self.plays = plays
         self.user = user                                 # whose «Не показывать» the wave respects (None: nobody's)
@@ -118,6 +131,7 @@ class Wave:
         self.voices = [str(x) for x in (voices or []) if x in VOICES]
         self.seed_track = seed_track
         self.seed_artist = seed_artist or None
+        self.heard = heard or {}
 
     @property
     def is_radio(self) -> bool:
@@ -210,7 +224,7 @@ class Wave:
         if self.is_radio:                                # the closer, the more often
             w = [x * max(r.get("wave_sim") or 0.0, 0.02) ** 2 for x, r in zip(w, rows)]
         now = time.time()
-        return [x * (0.05 if r.get("last_played") and now - r["last_played"] < RECENT_SEC else 1.0)
+        return [x * recency(max(r.get("last_played") or 0, self.heard.get(r["id"], 0)) or None, now)
                 for x, r in zip(w, rows)]
 
     def _sample(self, pool: dict[int, dict], n: int) -> list[dict]:

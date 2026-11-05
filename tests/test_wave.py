@@ -37,6 +37,29 @@ def test_exclude_recent_and_exhausted_pool(db):
     assert picks < 15                                                  # ~1/6 normally, ~1/100 with the penalty
 
 
+def test_heard_days_ago_comes_back_rarely_and_slowly_returns():
+    """«Not again so soon» lasts days, not two hours: yesterday's track is rare, a month-old one is as welcome as new."""
+    from musicplayer.core.wave import recency
+    now = time.time()
+    day = 86400
+    assert recency(None, now) == 1.0
+    assert recency(now - 600, now) == 0.02
+    assert recency(now - 10 * 3600, now) < 0.15                        # the same day: was 1.0 after two hours
+    assert 0.2 < recency(now - day, now) < 0.4
+    assert 0.85 < recency(now - 7 * day, now) < 0.95
+    assert recency(now - 30 * day, now) > 0.99
+
+
+def test_tracks_started_on_the_phone_come_back_rarely(db):
+    """``heard``: skipped on the phone a minute ago (not a counted play) - the wave started anew avoids it too."""
+    ids = tracks(db, 6)
+    db.set_moods(ids, ["Грустное"])
+    heard = {ids[0]: time.time() - 60, ids[1]: time.time() - 60}
+    picks = sum(bool({ids[0], ids[1]} & {t["id"] for t in Wave(db, ["Грустное"], rng=random.Random(s),
+                                                                     heard=heard).next_batch(1)}) for s in range(200))
+    assert picks < 10                                                  # ~1/3 normally
+
+
 def test_character_prefers_favourites_or_unfamiliar(db):
     ids = tracks(db, 10)
     db.set_moods(ids, ["Грустное"])

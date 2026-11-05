@@ -89,9 +89,9 @@ class LabelFeedPage(QWidget):
         self.btn_pause = QPushButton("⏯ Пауза (Space)")
         self.btn_undo.setText("↶ Назад  (Backspace)")
         from musicplayer.ui.pages.library import TRASH_CSS
-        self.btn_trash = QPushButton("🗑 Удалить файл…  (Del)")
+        self.btn_trash = QPushButton("🗑 На удаление  (Del)")
         self.btn_trash.setStyleSheet(TRASH_CSS)
-        self.btn_trash.setToolTip("Плохая запись? Файл уйдёт в корзину Windows (с подтверждением), лента пойдёт дальше")
+        self.btn_trash.setToolTip("Плохая запись? В список «На удаление» (удалить файл можно оттуда), лента пойдёт дальше")
         self.progress = QProgressBar()
         self.progress.setTextVisible(True)
         self.progress.setFixedHeight(18)
@@ -374,10 +374,10 @@ class LabelFeedPage(QWidget):
         self._render()
 
     def trash_current(self) -> None:
-        """A bad recording: to the Recycle Bin (asks first), then the next track."""
-        from musicplayer.ui.pages.library import confirm_trash
+        """A bad recording: onto «На удаление», then the next track."""
+        from musicplayer.ui import deleteactions
         t = self.current
-        if t is not None and confirm_trash(self, self.ctx, [t]):
+        if t is not None and deleteactions.toggle(self.ctx, self, [t], on=True):
             self.skipped += 1
             self._advance()
 

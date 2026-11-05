@@ -131,7 +131,7 @@ def test_mini_player_like_labels_and_delete(qtbot, app, library, monkeypatch):
     monkeypatch.setattr(hideactions, "show_menu", lambda menu, pos: seen.append([a.text() for a in menu.actions()]))
     mini.btn_tags.click()                                                   # labels: track / album / artist
     assert seen and any(x.startswith("трека") for x in seen[0])
-    monkeypatch.setattr(trash, "to_recycle_bin", lambda p: True)
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: (box.defaultButton().click(), 0)[1])
-    mini.btn_trash.click()                                                  # delete (asks first)
-    assert t["id"] not in [x["id"] for x in ctx.db.search(limit=100)]
+    from musicplayer.core import deletemarks
+    mini.btn_trash.click()                                                  # «На удаление» (the file stays)
+    assert deletemarks.marked_by(ctx.db, ctx.listener) == [{"kind": "track", "key": str(t["id"])}]
+    assert t["id"] in [x["id"] for x in ctx.db.search(limit=100)] and not win._undo_btn.isHidden()

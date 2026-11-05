@@ -31,11 +31,12 @@ def test_draft_apply_cancel_and_delete(qtbot, app, library, monkeypatch):
         got = ctx.db.get_track(t["id"])
         assert "Jazz" in got["genres"] and mood not in got["moods"]
     assert "альбому" in win.pages["wave"].toast.text()
-    monkeypatch.setattr(trash, "to_recycle_bin", lambda p: True)
-    monkeypatch.setattr(QMessageBox, "exec", lambda box: (box.defaultButton().click(), 0)[1])
-    panel.btn_delete.click()                                                # «Удалить трек…»
-    assert first["id"] not in [t["id"] for t in ctx.db.search(limit=100)]
-    assert panel.track is None or panel.track["id"] != first["id"]
+    from musicplayer.core import deletemarks
+    panel.btn_delete.click()                                                # «На удаление»: a mark, not a deletion
+    assert deletemarks.marked_by(ctx.db, "owner") == [{"kind": "track", "key": str(first["id"])}]
+    assert first["id"] in [t["id"] for t in ctx.db.search(limit=100)] and panel.btn_delete.text() == "Снять пометку"
+    panel.btn_delete.click()                                                # again: the mark is off
+    assert deletemarks.marked_by(ctx.db, "owner") == [] and panel.btn_delete.text() == "На удаление"
 
 
 def test_player_bar_links_and_selectable_wave_text(qtbot, app, library):

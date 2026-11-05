@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineE
 
 from musicplayer.core import moods as moods_vocab
 from musicplayer.core.similar import similar_tracks
+from musicplayer.ui import deleteactions
 from musicplayer.ui.context import AppContext
 from musicplayer.ui.pages.playlists import playlist_menu
 from musicplayer.core.genres import from_paths, to_paths
@@ -552,9 +553,9 @@ class LibraryPage(QWidget):
         self.btn_copy = QPushButton("⧉ Копировать метки")
         self.btn_copy.setToolTip("Скопировать все метки выбранного трека (настроения, тип записи, язык, вокал, жанры, эпоха)")
         self.btn_paste = QPushButton("⎘ Вставить метки")
-        self.btn_trash = QPushButton("🗑 Удалить файл…  (Del)")
+        self.btn_trash = QPushButton("🗑 На удаление  (Del)")
         self.btn_trash.setStyleSheet(TRASH_CSS)
-        self.btn_trash.setToolTip("Переместить файлы выбранных треков в корзину Windows (с подтверждением)")
+        self.btn_trash.setToolTip(deleteactions.TIP)
         self.sugg_box = QVBoxLayout()
         self.sugg_title = QLabel("Предложения")
         self.sugg_title.setStyleSheet(f"color:{TOKENS['warning']}")
@@ -662,7 +663,7 @@ class LibraryPage(QWidget):
         for i, key in enumerate("1234567890"):
             add(key, lambda i=i: self.toggle_mood_index(i))
         add("F2", self.edit_selected)
-        add("Delete", self.trash_selected)          # files of the selected tracks -> Recycle Bin (asks first)
+        add("Delete", self.trash_selected)          # the selected tracks -> «На удаление» (or off it)
         add("A", lambda: self.quick_resolve(True))
         add("D", lambda: self.quick_resolve(False))
         add("Return", self.play_selected)
@@ -788,7 +789,7 @@ class LibraryPage(QWidget):
         m.addSeparator()
         add_track_items(m, self.ctx, self, tracks)
         m.addSeparator()
-        m.addAction("Удалить файл… (Delete)", self.trash_selected)
+        m.addAction(f"{deleteactions.label(self.ctx, tracks)} (Delete)", self.trash_selected)
         m.exec(self.view.viewport().mapToGlobal(pos))
 
     def _copy_link(self, t: dict) -> None:
@@ -879,6 +880,7 @@ class LibraryPage(QWidget):
         self.genre_chips.show_state(sel)
         self.era_chips.show_state(sel)
         self.btn_trash.setEnabled(bool(sel))
+        self.btn_trash.setText(f"🗑 {deleteactions.label(self.ctx, sel)}  (Del)")
         self.btn_edit.setEnabled(bool(sel))
         fav = bool(sel) and all(self.ctx.is_liked("track", str(t["id"])) for t in sel)
         self.btn_fav.setText("♥ В избранном (убрать)" if fav else "♡ В избранное")
@@ -983,7 +985,9 @@ class LibraryPage(QWidget):
             self.ctx.events.tracks_changed.emit(ids)
 
     def trash_selected(self) -> None:
-        confirm_trash(self, self.ctx, list(self._selection))
+        sel = list(self._selection)
+        deleteactions.toggle(self.ctx, self, sel)
+        self.btn_trash.setText(f"🗑 {deleteactions.label(self.ctx, sel)}  (Del)")
 
     def _set_lv(self, field: str, value) -> None:
         ids = [t["id"] for t in self._selection]
